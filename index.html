@@ -635,8 +635,21 @@
   }
   function persist(list) { localStorage.setItem(KEY, JSON.stringify(list)); }
   function loadSetup() {
-    try { return JSON.parse(localStorage.getItem(SETKEY)) || {}; }
+    var s;
+    try { s = JSON.parse(localStorage.getItem(SETKEY)) || {}; }
+    catch (e) { s = {}; }
+    var sess = loadSessionProject();
+    s.project = sess.project || '';
+    s.projectNum = sess.projectNum || '';
+    return s;
+  }
+  var PROJSESSKEY = 'hsg_mvp_session_project';
+  function loadSessionProject() {
+    try { return JSON.parse(sessionStorage.getItem(PROJSESSKEY)) || {}; }
     catch (e) { return {}; }
+  }
+  function saveSessionProject(project, projectNum) {
+    sessionStorage.setItem(PROJSESSKEY, JSON.stringify({ project: project || '', projectNum: projectNum || '' }));
   }
 
   /* ---------- signature pad ---------- */
@@ -1359,9 +1372,11 @@
     updateColumnsHint();
   }
   function saveSetup() {
+    saveSessionProject(
+      document.getElementById('sProject').value.trim(),
+      document.getElementById('sProjectNum').value.trim()
+    );
     localStorage.setItem(SETKEY, JSON.stringify({
-      projectNum: document.getElementById('sProjectNum').value.trim(),
-      project: document.getElementById('sProject').value.trim(),
       hsgRep: document.getElementById('sHsgRep').value.trim(),
       initials: document.getElementById('sInit').value.trim().toUpperCase(),
       gc: document.getElementById('sGc').value.trim(),
@@ -1380,9 +1395,12 @@
   /* ---------- transmittal ---------- */
   function transNo(x, num) {
     var init = (loadSetup().initials || '').toUpperCase();
-    var n = x.serial || num;
-    return 'HSG-DT-' + String(x.date || '').replace(/-/g, '')
-      + (init ? '-' + init : '') + '-' + String(n).padStart(3, '0');
+    var proj = String(x.projectNum || 'DT').replace(/\s+/g, '');
+    var d = new Date(x.id || Date.now());
+    var pad = function(n) { return String(n).padStart(2, '0'); };
+    var stamp = String(d.getFullYear()).slice(-2) + pad(d.getMonth() + 1) + pad(d.getDate())
+      + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+    return 'HSG-' + proj + '-' + stamp + (init ? '-' + init : '');
   }
 
   function openTrans(id, num) {
