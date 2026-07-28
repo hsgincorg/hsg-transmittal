@@ -527,6 +527,9 @@
         </div>
         <label>Active Project Tracker — Board ID</label>
         <input type="text" id="sMBoardId" placeholder="e.g., 1234567890" inputmode="numeric">
+        <label>Sync Proxy URL (recommended — keeps the token off this device)</label>
+        <input type="text" id="sMProxyUrl" placeholder="https://your-worker.workers.dev">
+        <p class="hint">If set, syncing goes through your proxy and the token below isn't needed. Leave blank to call Monday.com directly (requires the token).</p>
         <label style="display:flex; align-items:center; gap:8px; margin-top:12px; cursor:pointer;">
           <input type="checkbox" id="sMNumIsTitle">
           <span style="font-weight:600; font-size:13px; color:var(--navy);">Project number is the item's title, not a column (check this if items are named like "2022022")</span>
@@ -1082,16 +1085,21 @@
   function syncMondayProjects() {
     var token = document.getElementById('sMToken').value.trim();
     var boardId = document.getElementById('sMBoardId').value.trim();
+    var proxyUrl = document.getElementById('sMProxyUrl').value.trim();
     var numColOverride = document.getElementById('sMNumCol').value.trim();
     var nameColOverride = document.getElementById('sMNameCol').value.trim();
     var numIsTitle = document.getElementById('sMNumIsTitle').checked;
-    if (!token || !boardId) { toast('Enter your Monday.com token and Board ID first', 'var(--red)'); return; }
+    if (!boardId) { toast('Enter the Board ID first', 'var(--red)'); return; }
+    if (!proxyUrl && !token) { toast('Enter your Monday.com token, or a Sync Proxy URL, first', 'var(--red)'); return; }
     toast('Reading board columns…');
 
+    var endpoint = proxyUrl || 'https://api.monday.com/v2';
     function mondayFetch(query, variables) {
-      return fetch('https://api.monday.com/v2', {
+      var headers = { 'Content-Type': 'application/json' };
+      if (!proxyUrl) headers['Authorization'] = token;
+      return fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': token },
+        headers: headers,
         body: JSON.stringify({ query: query, variables: variables })
       }).then(function(r) { return r.json(); });
     }
@@ -1156,6 +1164,7 @@
         var cur = loadSetup();
         cur.mToken = token;
         cur.mBoardId = boardId;
+        cur.mProxyUrl = proxyUrl;
         cur.mNumCol = numColOverride;
         cur.mNameCol = nameColOverride;
         cur.mNumIsTitle = numIsTitle;
@@ -1329,6 +1338,7 @@
     document.getElementById('sOwner').value = s.owner || '';
     document.getElementById('sMToken').value = s.mToken || '';
     document.getElementById('sMBoardId').value = s.mBoardId || '';
+    document.getElementById('sMProxyUrl').value = s.mProxyUrl || '';
     document.getElementById('sMNumCol').value = s.mNumCol || '';
     document.getElementById('sMNameCol').value = s.mNameCol || '';
     document.getElementById('sMNumIsTitle').checked = !!s.mNumIsTitle;
@@ -1346,6 +1356,7 @@
       owner: document.getElementById('sOwner').value.trim(),
       mToken: document.getElementById('sMToken').value.trim(),
       mBoardId: document.getElementById('sMBoardId').value.trim(),
+      mProxyUrl: document.getElementById('sMProxyUrl').value.trim(),
       mNumCol: document.getElementById('sMNumCol').value.trim(),
       mNameCol: document.getElementById('sMNameCol').value.trim(),
       mNumIsTitle: document.getElementById('sMNumIsTitle').checked
