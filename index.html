@@ -862,12 +862,12 @@
     if (t === 'new') setTimeout(sizeCanvas, 50);
   }
 
-  function toast(msg, color) {
+  function toast(msg, color, duration) {
     var el = document.getElementById('toast');
     el.textContent = msg;
     el.style.background = color || 'var(--green)';
     el.classList.add('show');
-    setTimeout(function() { el.classList.remove('show'); }, 2200);
+    setTimeout(function() { el.classList.remove('show'); }, duration || 2200);
   }
 
   function saveEntry(e) {
@@ -1164,10 +1164,10 @@
         updateSyncStatus();
         toast(list.length + ' projects synced from Monday.com');
       }).catch(function(err) {
-        toast('Could not reach Monday.com — check connection', 'var(--red)');
+        toast('Sync step 2 failed: ' + (err && err.message ? err.message : String(err)), 'var(--red)', 7000);
       });
     }).catch(function(err) {
-      toast('Could not reach Monday.com — check connection', 'var(--red)');
+      toast('Sync step 1 failed: ' + (err && err.message ? err.message : String(err)), 'var(--red)', 7000);
     });
   }
 
