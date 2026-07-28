@@ -268,6 +268,16 @@
     padding: 14px;
     margin-bottom: 10px;
   }
+  .entry-project {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--navy);
+    background: #eef2f9;
+    display: inline-block;
+    padding: 3px 9px;
+    border-radius: 6px;
+    margin-bottom: 8px;
+  }
   .entry-top {
     display: flex;
     justify-content: space-between;
@@ -588,10 +598,8 @@
       <p class="hint" style="margin-top:4px">Pick a name to auto-fill it and the initials. Choose "+ Add New" for anyone not on the list, or to add a title/contact info.</p>
       <label>Your Initials (used in transmittal numbers)</label>
       <input type="text" id="sInit" placeholder="e.g., RM" maxlength="4" style="text-transform:uppercase">
-      <label>General Contractor (To)</label>
+      <label>Company (To)</label>
       <input type="text" id="sGc" placeholder="e.g., ABC Construction — attn: Site Super, email">
-      <label>Owner (To)</label>
-      <input type="text" id="sOwner" placeholder="Owner / owner's rep, email">
       <button class="btn btn-primary" onclick="saveSetup()">Save Project Info</button>
     </div>
   </div>
@@ -777,8 +785,8 @@
       + '<input type="text" class="iVendor" placeholder="e.g., ABC Equipment Rental" required>'
       + '<label class="req">Equipment Description</label>'
       + '<input type="text" class="iDesc" placeholder="e.g., Genie S-60 boom lift, S/N 12345" required>'
-      + '<div class="row"><div><label>Quantity</label>'
-      + '<input type="number" class="iQty" inputmode="decimal" step="any" placeholder="1"></div>'
+      + '<div class="row"><div><label class="req">Quantity</label>'
+      + '<input type="number" class="iQty" inputmode="decimal" step="any" placeholder="1" required></div>'
       + '<div><label>Unit</label><input type="text" class="iUnit" placeholder="unit / boxes"></div></div>'
       + '<label>PO / Ticket #</label>'
       + '<input type="text" class="iPo" placeholder="PO-4512 / T-0088">';
@@ -880,10 +888,13 @@
       destVal = document.getElementById('fDestOther').value.trim();
       if (!destVal) { toast('Enter a destination', 'var(--red)'); return false; }
     }
+    var setupNow = loadSetup();
     var entry = {
       id: editId || Date.now(),
       date: document.getElementById('fDate').value,
       time: document.getElementById('fTime').value,
+      project: setupNow.project || '',
+      projectNum: setupNow.projectNum || '',
       items: collectItems(),
       from: document.getElementById('fFrom').value.trim(),
       fac: document.getElementById('fFac').value,
@@ -899,6 +910,7 @@
       idx = list.findIndex(function(x) { return x.id === editId; });
       var prev = idx > -1 ? list[idx] : null;
       entry.serial = (prev && prev.serial) || nextSerial();
+      if (prev) { entry.project = prev.project; entry.projectNum = prev.projectNum; }
       if (idx > -1) list[idx] = entry; else { list.push(entry); idx = list.length - 1; }
       toast('Delivery updated');
     } else {
@@ -911,7 +923,7 @@
     var num = idx + 1;
     resetForm();
     updateCount();
-    if (confirm('Saved. Generate transmittal for GC & Owner now?')) {
+    if (confirm('Saved. Generate transmittal now?')) {
       openTrans(entry.id, num);
     }
     return false;
@@ -955,6 +967,7 @@
       var vendors = [];
       its.forEach(function(it) { if (it.vendor && vendors.indexOf(it.vendor) === -1) vendors.push(it.vendor); });
       html += '<div class="entry">'
+        + ((x.projectNum || x.project) ? '<div class="entry-project">' + esc((x.projectNum ? x.projectNum + ' — ' : '') + (x.project || '')) + '</div>' : '')
         + '<div class="entry-top"><span class="entry-num">#' + (i + 1) + '</span>'
         + '<span class="entry-date">' + esc(x.date) + ' ' + esc(x.time) + '</span></div>'
         + '<div class="entry-title">' + esc(first.desc) + (first.qty ? ' — ' + esc(first.qty) + ' ' + esc(first.unit) : '')
@@ -1335,7 +1348,6 @@
     }
     document.getElementById('sInit').value = s.initials || '';
     document.getElementById('sGc').value = s.gc || '';
-    document.getElementById('sOwner').value = s.owner || '';
     document.getElementById('sMToken').value = s.mToken || '';
     document.getElementById('sMBoardId').value = s.mBoardId || '';
     document.getElementById('sMProxyUrl').value = s.mProxyUrl || '';
@@ -1353,7 +1365,6 @@
       hsgRep: document.getElementById('sHsgRep').value.trim(),
       initials: document.getElementById('sInit').value.trim().toUpperCase(),
       gc: document.getElementById('sGc').value.trim(),
-      owner: document.getElementById('sOwner').value.trim(),
       mToken: document.getElementById('sMToken').value.trim(),
       mBoardId: document.getElementById('sMBoardId').value.trim(),
       mProxyUrl: document.getElementById('sMProxyUrl').value.trim(),
@@ -1378,8 +1389,8 @@
     var x = load().find(function(e) { return e.id === id; });
     if (!x) return;
     var s = loadSetup();
-    if (!s.gc && !s.owner) {
-      if (confirm('GC and Owner contacts are not set. Add them under "Project Info" first?')) {
+    if (!s.gc) {
+      if (confirm('Company contact is not set. Add it under "Project Info" first?')) {
         showTab('setup');
         return;
       }
@@ -1395,11 +1406,10 @@
       +   '<div>Issued: ' + esc(today) + '</div></div>'
       + '</div>'
       + '<div class="td-parties">'
-      +   '<div class="td-party"><h3>To — General Contractor</h3><p>' + (esc(s.gc) || '—') + '</p></div>'
-      +   '<div class="td-party"><h3>To — Owner</h3><p>' + (esc(s.owner) || '—') + '</p></div>'
+      +   '<div class="td-party"><h3>To — Company</h3><p>' + (esc(s.gc) || '—') + '</p></div>'
+      +   '<div class="td-party"><h3>From — HSG</h3><p>' + (esc(s.hsgRep) || '—') + '</p></div>'
       + '</div>'
       + '<div class="td-parties">'
-      +   '<div class="td-party"><h3>From — HSG</h3><p>' + (esc(s.hsgRep) || '—') + '</p></div>'
       +   '<div class="td-party"><h3>Project / Site</h3><p>' + (esc(projectLabel(s)) || '—') + '</p></div>'
       + '</div>'
       + '<table class="td-table">'
@@ -1973,10 +1983,9 @@ function buildTransmittalPdf(jsPDF, x, num, s, tnOverride) {
     doc.setTextColor(0, 0, 0);
     doc.text(doc.splitTextToSize(text || '—', bw - 18).slice(0, 3), px + 9, py + 27);
   }
-  party(M, 112, 'To — General Contractor', s.gc || '—');
-  party(M + bw + 12, 112, 'To — Owner', s.owner || '—');
-  party(M, 174, 'From — HSG', s.hsgRep || '—');
-  party(M + bw + 12, 174, 'Project / Site', projectLabel(s) || '—');
+  party(M, 112, 'To — Company', s.gc || '—');
+  party(M + bw + 12, 112, 'From — HSG', s.hsgRep || '—');
+  party(M, 174, 'Project / Site', projectLabel(s) || '—');
 
   // Shared details
   var shared = [
