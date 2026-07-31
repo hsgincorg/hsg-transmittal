@@ -243,6 +243,60 @@
     border-radius: 8px;
     cursor: pointer;
   }
+  .choice-cards { display: flex; flex-direction: column; gap: 12px; }
+  .choice-card {
+    background: var(--card);
+    border: 2px solid var(--border);
+    border-radius: 12px;
+    padding: 18px;
+    cursor: pointer;
+    text-align: left;
+    touch-action: manipulation;
+  }
+  .choice-card:active { background: var(--bg); border-color: var(--navy-light); }
+  .choice-card .choice-icon { font-size: 26px; margin-bottom: 8px; }
+  .choice-card h3 { font-size: 16px; color: var(--navy); margin-bottom: 4px; }
+  .choice-card p { font-size: 13px; color: var(--muted); }
+  .back-link {
+    display: inline-block;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--navy);
+    margin-bottom: 12px;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+  .board-item {
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    background: #fff;
+    touch-action: manipulation;
+  }
+  .board-item:active { background: var(--bg); }
+  .board-item b { color: var(--navy); font-size: 14px; }
+  .board-item .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .map-row { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
+  .map-row label { flex: 0 0 110px; margin: 0; font-size: 13px; }
+  .map-row select { flex: 1; margin: 0; }
+  .mon-toolbar { display: flex; gap: 8px; margin: 12px 0 10px; }
+  .mon-toolbar button { flex: 1; margin: 0; }
+  .mon-check-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    background: #fafbfc;
+    cursor: pointer;
+  }
+  .mon-check-row input[type="checkbox"] { margin-top: 2px; }
+  .mon-check-row .mi-name { font-weight: 700; font-size: 13.5px; color: var(--navy); }
+  .mon-check-row .mi-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
   .toast {
     position: fixed;
     bottom: calc(20px + env(safe-area-inset-bottom));
@@ -267,16 +321,6 @@
     border-radius: 10px;
     padding: 14px;
     margin-bottom: 10px;
-  }
-  .entry-project {
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--navy);
-    background: #eef2f9;
-    display: inline-block;
-    padding: 3px 9px;
-    border-radius: 6px;
-    margin-bottom: 8px;
   }
   .entry-top {
     display: flex;
@@ -444,8 +488,83 @@
     <button id="tabSetup" class="active" onclick="showTab('setup')">Project Info</button>
   </div>
 
-  <!-- NEW DELIVERY FORM -->
-  <div id="viewNew" class="hidden">
+  <!-- NEW DELIVERY AREA -->
+  <div id="viewNewArea" class="hidden">
+
+    <!-- Step 1: choose transmittal type -->
+    <div id="viewNewChoice">
+      <div class="card">
+        <h2>Start a New Transmittal</h2>
+        <p class="hint">Choose how you'd like to build this delivery.</p>
+        <div class="choice-cards">
+          <div class="choice-card" onclick="startGenericDelivery()">
+            <div class="choice-icon">📝</div>
+            <h3>Generic Delivery</h3>
+            <p>Enter delivery items by hand, as usual.</p>
+          </div>
+          <div class="choice-card" onclick="startMondayDelivery()">
+            <div class="choice-icon">📋</div>
+            <h3>Central Texas Delivery</h3>
+            <p>Pick a board from the Central Texas workspace and check off which items to include.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 2a (Monday): choose board -->
+    <div id="viewMondayBoard" class="hidden">
+      <div class="card">
+        <span class="back-link" onclick="showNewChoice()">‹ Back</span>
+        <h2>Choose a Board</h2>
+        <p class="hint" id="mBoardHint">Loading boards…</p>
+        <input type="text" id="mBoardSearch" placeholder="Search boards…" oninput="renderBoardList()">
+        <div id="mBoardList" style="margin-top:10px"></div>
+        <button type="button" class="btn btn-secondary" onclick="loadMondayBoards()">Refresh List</button>
+      </div>
+    </div>
+
+    <!-- Step 2b (Monday): map columns + pick items -->
+    <div id="viewMondayItems" class="hidden">
+      <div class="card">
+        <span class="back-link" onclick="showMondayBoardArea()">‹ Back to Boards</span>
+        <h2 id="mItemsBoardName">Board</h2>
+        <h3 onclick="toggleColumnMap()" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center; font-size:14px; color:var(--navy); margin-top:8px;">
+          Column Matching
+          <span id="colMapCaret" style="font-size:12px; color:var(--muted); font-weight:600;">Review ▾</span>
+        </h3>
+        <div id="colMapBody" class="hidden">
+          <p class="hint">Match this board's columns to delivery fields, then load items.</p>
+          <div class="map-row"><label>Description</label><select id="mMapDesc"></select></div>
+          <div class="map-row"><label>Vendor</label><select id="mMapVendor"></select></div>
+          <div class="map-row"><label>Quantity</label><select id="mMapQty"></select></div>
+          <div class="map-row"><label>Unit</label><select id="mMapUnit"></select></div>
+          <div class="map-row"><label>PO / Ticket #</label><select id="mMapPo"></select></div>
+          <div class="map-row"><label>Status</label><select id="mMapStatus"></select></div>
+          <p class="hint">If set, only items marked Received or Staged will be shown as options below, and saving this delivery will set this status to "Delivered" on each selected item.</p>
+          <div class="map-row"><label>Date Out</label><select id="mMapDateOut"></select></div>
+          <p class="hint">If set, saving this delivery will write the delivery date into this column on each selected Monday.com item.</p>
+          <div class="map-row"><label>Received By</label><select id="mMapReceivedBy"></select></div>
+          <div class="map-row"><label>Delivered By</label><select id="mMapDeliveredBy"></select></div>
+          <div class="map-row"><label>Delivered To</label><select id="mMapDeliveredTo"></select></div>
+          <div class="map-row"><label>Delivery Notes</label><select id="mMapDeliveryNotes"></select></div>
+          <p class="hint">These four are optional — if set, saving the delivery also writes the GC recipient's name, the HSG rep who delivered, the destination, and the condition/notes into these columns for your records.</p>
+        </div>
+        <button type="button" class="btn btn-secondary" onclick="loadMondayItems()">Reload Items (after changing mapping)</button>
+        <p class="hint" id="mItemsStatus"></p>
+
+        <div id="mItemsChecklistWrap" class="hidden">
+          <div class="mon-toolbar">
+            <button type="button" class="btn-secondary" onclick="selectAllMonItems(true)">Select All</button>
+            <button type="button" class="btn-secondary" onclick="selectAllMonItems(false)">Select None</button>
+          </div>
+          <div id="mItemsChecklist"></div>
+          <button type="button" class="btn btn-primary" onclick="addMondayItemsToDelivery()">Add Selected Items</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 3: the delivery form itself -->
+    <div id="viewNewForm" class="hidden">
     <div class="card">
       <form id="form" onsubmit="return saveEntry(event)">
         <div class="row">
@@ -510,6 +629,8 @@
         <button type="button" class="btn btn-secondary hidden" id="cancelEdit" onclick="cancelEdit()">Cancel Edit</button>
       </form>
     </div>
+    </div>
+
   </div>
 
   <!-- LOG VIEW -->
@@ -598,8 +719,10 @@
       <p class="hint" style="margin-top:4px">Pick a name to auto-fill it and the initials. Choose "+ Add New" for anyone not on the list, or to add a title/contact info.</p>
       <label>Your Initials (used in transmittal numbers)</label>
       <input type="text" id="sInit" placeholder="e.g., RM" maxlength="4" style="text-transform:uppercase">
-      <label>Company (To)</label>
+      <label>General Contractor (To)</label>
       <input type="text" id="sGc" placeholder="e.g., ABC Construction — attn: Site Super, email">
+      <label>Owner (To)</label>
+      <input type="text" id="sOwner" placeholder="Owner / owner's rep, email">
       <button class="btn btn-primary" onclick="saveSetup()">Save Project Info</button>
     </div>
   </div>
@@ -628,6 +751,11 @@
   }
   var editId = null;
   var currentTrans = null;
+  var allMonBoards = [];
+  var selectedMonBoard = null;
+  var monBoardColumns = [];
+  var monLoadedItems = [];
+  var pendingMonday = null; // { boardId, boardName, dateOutCol, itemIds } for write-back on save
 
   function load() {
     try { return JSON.parse(localStorage.getItem(KEY)) || []; }
@@ -635,21 +763,8 @@
   }
   function persist(list) { localStorage.setItem(KEY, JSON.stringify(list)); }
   function loadSetup() {
-    var s;
-    try { s = JSON.parse(localStorage.getItem(SETKEY)) || {}; }
-    catch (e) { s = {}; }
-    var sess = loadSessionProject();
-    s.project = sess.project || '';
-    s.projectNum = sess.projectNum || '';
-    return s;
-  }
-  var PROJSESSKEY = 'hsg_mvp_session_project';
-  function loadSessionProject() {
-    try { return JSON.parse(sessionStorage.getItem(PROJSESSKEY)) || {}; }
+    try { return JSON.parse(localStorage.getItem(SETKEY)) || {}; }
     catch (e) { return {}; }
-  }
-  function saveSessionProject(project, projectNum) {
-    sessionStorage.setItem(PROJSESSKEY, JSON.stringify({ project: project || '', projectNum: projectNum || '' }));
   }
 
   /* ---------- signature pad ---------- */
@@ -798,8 +913,8 @@
       + '<input type="text" class="iVendor" placeholder="e.g., ABC Equipment Rental" required>'
       + '<label class="req">Equipment Description</label>'
       + '<input type="text" class="iDesc" placeholder="e.g., Genie S-60 boom lift, S/N 12345" required>'
-      + '<div class="row"><div><label class="req">Quantity</label>'
-      + '<input type="number" class="iQty" inputmode="decimal" step="any" placeholder="1" required></div>'
+      + '<div class="row"><div><label>Quantity</label>'
+      + '<input type="number" class="iQty" inputmode="decimal" step="any" placeholder="1"></div>'
       + '<div><label>Unit</label><input type="text" class="iUnit" placeholder="unit / boxes"></div></div>'
       + '<label>PO / Ticket #</label>'
       + '<input type="text" class="iPo" placeholder="PO-4512 / T-0088">';
@@ -874,16 +989,54 @@
     document.getElementById('fTime').value = String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
   }
 
-  function showTab(t) {
-    document.getElementById('viewNew').classList.toggle('hidden', t !== 'new');
+  function activateTopTab(t) {
+    document.getElementById('viewNewArea').classList.toggle('hidden', t !== 'new');
     document.getElementById('viewLog').classList.toggle('hidden', t !== 'log');
     document.getElementById('viewSetup').classList.toggle('hidden', t !== 'setup');
     document.getElementById('tabNew').classList.toggle('active', t === 'new');
     document.getElementById('tabLog').classList.toggle('active', t === 'log');
     document.getElementById('tabSetup').classList.toggle('active', t === 'setup');
+  }
+
+  function showTab(t) {
+    activateTopTab(t);
     if (t === 'log') render();
     if (t === 'setup') fillSetup();
-    if (t === 'new') setTimeout(sizeCanvas, 50);
+    if (t === 'new') showNewChoice();
+  }
+
+  /* ---------- new delivery: mode selection ---------- */
+  function hideAllNewSubviews() {
+    document.getElementById('viewNewChoice').classList.add('hidden');
+    document.getElementById('viewMondayBoard').classList.add('hidden');
+    document.getElementById('viewMondayItems').classList.add('hidden');
+    document.getElementById('viewNewForm').classList.add('hidden');
+  }
+  function showNewChoice() {
+    hideAllNewSubviews();
+    document.getElementById('viewNewChoice').classList.remove('hidden');
+  }
+  function showNewFormArea() {
+    hideAllNewSubviews();
+    document.getElementById('viewNewForm').classList.remove('hidden');
+    setTimeout(sizeCanvas, 50);
+  }
+  function showMondayBoardArea() {
+    hideAllNewSubviews();
+    document.getElementById('viewMondayBoard').classList.remove('hidden');
+    if (!allMonBoards.length) loadMondayBoards();
+  }
+  function showMondayItemsArea() {
+    hideAllNewSubviews();
+    document.getElementById('viewMondayItems').classList.remove('hidden');
+  }
+  function startGenericDelivery() {
+    pendingMonday = null;
+    resetForm();
+    showNewFormArea();
+  }
+  function startMondayDelivery() {
+    showMondayBoardArea();
   }
 
   function toast(msg, color, duration) {
@@ -901,13 +1054,10 @@
       destVal = document.getElementById('fDestOther').value.trim();
       if (!destVal) { toast('Enter a destination', 'var(--red)'); return false; }
     }
-    var setupNow = loadSetup();
     var entry = {
       id: editId || Date.now(),
       date: document.getElementById('fDate').value,
       time: document.getElementById('fTime').value,
-      project: setupNow.project || '',
-      projectNum: setupNow.projectNum || '',
       items: collectItems(),
       from: document.getElementById('fFrom').value.trim(),
       fac: document.getElementById('fFac').value,
@@ -915,7 +1065,8 @@
       recv: document.getElementById('fRecv').value.trim(),
       notes: document.getElementById('fNotes').value.trim(),
       sig: getSig(),
-      photos: photosData.slice()
+      photos: photosData.slice(),
+      monday: pendingMonday || null
     };
     var list = load();
     var idx = -1;
@@ -923,7 +1074,6 @@
       idx = list.findIndex(function(x) { return x.id === editId; });
       var prev = idx > -1 ? list[idx] : null;
       entry.serial = (prev && prev.serial) || nextSerial();
-      if (prev) { entry.project = prev.project; entry.projectNum = prev.projectNum; }
       if (idx > -1) list[idx] = entry; else { list.push(entry); idx = list.length - 1; }
       toast('Delivery updated');
     } else {
@@ -934,9 +1084,15 @@
     }
     persist(list);
     var num = idx + 1;
+    if (entry.monday && entry.monday.itemIds && entry.monday.itemIds.length
+      && (entry.monday.dateOutCol || entry.monday.statusCol || entry.monday.recvByCol || entry.monday.deliveredByCol || entry.monday.deliveredToCol || entry.monday.notesCol)) {
+      pushMondayUpdates(entry.monday, entry);
+    }
+    pendingMonday = null;
     resetForm();
     updateCount();
-    if (confirm('Saved. Generate transmittal now?')) {
+    showNewChoice();
+    if (confirm('Saved. Generate transmittal for GC & Owner now?')) {
       openTrans(entry.id, num);
     }
     return false;
@@ -954,7 +1110,7 @@
     document.getElementById('cancelEdit').classList.add('hidden');
     nowDefaults();
   }
-  function cancelEdit() { resetForm(); showTab('log'); }
+  function cancelEdit() { pendingMonday = null; resetForm(); showTab('log'); }
   function updateCount() { document.getElementById('count').textContent = load().length; }
 
   function esc(s) {
@@ -980,7 +1136,6 @@
       var vendors = [];
       its.forEach(function(it) { if (it.vendor && vendors.indexOf(it.vendor) === -1) vendors.push(it.vendor); });
       html += '<div class="entry">'
-        + ((x.projectNum || x.project) ? '<div class="entry-project">' + esc((x.projectNum ? x.projectNum + ' — ' : '') + (x.project || '')) + '</div>' : '')
         + '<div class="entry-top"><span class="entry-num">#' + (i + 1) + '</span>'
         + '<span class="entry-date">' + esc(x.date) + ' ' + esc(x.time) + '</span></div>'
         + '<div class="entry-title">' + esc(first.desc) + (first.qty ? ' — ' + esc(first.qty) + ' ' + esc(first.unit) : '')
@@ -1008,6 +1163,7 @@
     var x = load().find(function(e) { return e.id === id; });
     if (!x) return;
     editId = id;
+    pendingMonday = x.monday || null;
     document.getElementById('fDate').value = x.date;
     document.getElementById('fTime').value = x.time;
     resetItems(getItems(x));
@@ -1028,7 +1184,8 @@
     renderPhotoGrid();
     document.getElementById('saveBtn').textContent = 'Update Delivery';
     document.getElementById('cancelEdit').classList.remove('hidden');
-    showTab('new');
+    activateTopTab('new');
+    showNewFormArea();
     setTimeout(function() { loadSigIntoPad(x.sig); }, 80);
     window.scrollTo(0, 0);
   }
@@ -1206,6 +1363,274 @@
     });
   }
 
+  /* ---------- Monday.com: pull items for a new delivery ---------- */
+  function mondayApiCall(query, variables) {
+    var s = loadSetup();
+    var token = s.mToken || '';
+    var proxyUrl = s.mProxyUrl || '';
+    if (!token && !proxyUrl) return Promise.reject(new Error('Set up your Monday.com token or Sync Proxy URL under Project Info first.'));
+    var endpoint = proxyUrl || 'https://api.monday.com/v2';
+    var headers = { 'Content-Type': 'application/json' };
+    if (!proxyUrl) headers['Authorization'] = token;
+    return fetch(endpoint, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify({ query: query, variables: variables })
+    }).then(function(r) { return r.json(); });
+  }
+
+  var CENTRAL_TEXAS_WORKSPACE_ID = '10315932';
+
+  function loadMondayBoards() {
+    var hint = document.getElementById('mBoardHint');
+    var s = loadSetup();
+    if (!s.mToken && !s.mProxyUrl) {
+      hint.textContent = 'Set up your Monday.com token or Sync Proxy URL under Project Info first.';
+      document.getElementById('mBoardList').innerHTML = '';
+      return;
+    }
+    hint.textContent = 'Loading boards…';
+    document.getElementById('mBoardList').innerHTML = '';
+    var query = 'query($ws: [ID!]) { boards(workspace_ids: $ws, limit: 200, order_by: created_at) { id name workspace { name } } }';
+    var vars = { ws: [CENTRAL_TEXAS_WORKSPACE_ID] };
+    mondayApiCall(query, vars).then(function(data) {
+      if (data.errors && data.errors.length) { hint.textContent = 'Monday.com error: ' + data.errors[0].message; return; }
+      var boards = (data.data && data.data.boards) || [];
+      allMonBoards = boards.filter(function(b) { return !/^subitems of /i.test(b.name || ''); });
+      hint.textContent = allMonBoards.length ? allMonBoards.length + ' board(s) found — tap one to continue.' : 'No boards found.';
+      renderBoardList();
+    }).catch(function(err) {
+      hint.textContent = 'Could not load boards: ' + (err && err.message ? err.message : String(err));
+    });
+  }
+
+  function renderBoardList() {
+    var q = (document.getElementById('mBoardSearch').value || '').trim().toLowerCase();
+    var list = q ? allMonBoards.filter(function(b) { return (b.name || '').toLowerCase().indexOf(q) > -1; }) : allMonBoards;
+    var box = document.getElementById('mBoardList');
+    if (!list.length) { box.innerHTML = allMonBoards.length ? '<p class="hint">No boards match that search.</p>' : ''; return; }
+    box.innerHTML = list.map(function(b) {
+      return '<div class="board-item" onclick="pickMonBoard(\'' + b.id + '\')"><b>' + esc(b.name) + '</b>'
+        + (b.workspace && b.workspace.name ? '<div class="sub">' + esc(b.workspace.name) + '</div>' : '') + '</div>';
+    }).join('');
+  }
+
+  function pickMonBoard(id) {
+    var b = allMonBoards.find(function(x) { return String(x.id) === String(id); });
+    if (!b) return;
+    selectedMonBoard = b;
+    monLoadedItems = [];
+    document.getElementById('mItemsBoardName').textContent = b.name;
+    document.getElementById('mItemsStatus').textContent = '';
+    document.getElementById('mItemsChecklistWrap').classList.add('hidden');
+    document.getElementById('mItemsChecklist').innerHTML = '';
+    showMondayItemsArea();
+    loadMonBoardColumns();
+  }
+
+  function loadMonBoardColumns() {
+    var status = document.getElementById('mItemsStatus');
+    status.textContent = 'Loading columns…';
+    var query = 'query($boardId: [ID!]) { boards(ids: $boardId) { columns { id title } } }';
+    mondayApiCall(query, { boardId: [selectedMonBoard.id] }).then(function(data) {
+      if (data.errors && data.errors.length) { status.textContent = 'Monday.com error: ' + data.errors[0].message; return; }
+      var board = data.data && data.data.boards && data.data.boards[0];
+      monBoardColumns = (board && board.columns) || [];
+      populateColumnMapSelects();
+      loadMondayItems();
+    }).catch(function(err) {
+      status.textContent = 'Could not load columns: ' + (err && err.message ? err.message : String(err));
+    });
+  }
+
+  function monMapKey() { return 'hsg_mvp_monmap_' + selectedMonBoard.id; }
+
+  var MON_MAP_FIELDS = [
+    { id: 'mMapDesc', guess: /desc|equipment|material|^item$/i, special: '__name__', specialLabel: '(Item Name / Title)' },
+    { id: 'mMapVendor', guess: /vendor|supplier/i, required: true },
+    { id: 'mMapQty', guess: /qty|quantity/i, required: true },
+    { id: 'mMapUnit', guess: /\bunit\b/i },
+    { id: 'mMapPo', guess: /\bpo\b|ticket|purchase/i, required: true },
+    { id: 'mMapStatus', guess: /status/i },
+    { id: 'mMapDateOut', guess: /date\s*out|ship(ped)?\s*date|out\s*date/i },
+    { id: 'mMapReceivedBy', guess: /received\s*by/i },
+    { id: 'mMapDeliveredBy', guess: /delivered\s*by/i },
+    { id: 'mMapDeliveredTo', guess: /delivered\s*to/i },
+    { id: 'mMapDeliveryNotes', guess: /delivery\s*notes/i }
+  ];
+
+  function populateColumnMapSelects() {
+    var saved = {};
+    try { saved = JSON.parse(localStorage.getItem(monMapKey())) || {}; } catch (e) {}
+    var needsReview = false;
+    MON_MAP_FIELDS.forEach(function(f) {
+      var sel = document.getElementById(f.id);
+      var opts = '<option value="">— None —</option>';
+      if (f.special) opts += '<option value="' + f.special + '">' + f.specialLabel + '</option>';
+      monBoardColumns.forEach(function(c) {
+        opts += '<option value="' + esc(c.id) + '">' + esc(c.title || c.id) + '</option>';
+      });
+      sel.innerHTML = opts;
+      if (saved[f.id] !== undefined && (saved[f.id] === '' || saved[f.id] === f.special || monBoardColumns.some(function(c) { return c.id === saved[f.id]; }))) {
+        sel.value = saved[f.id];
+      } else {
+        var guess = monBoardColumns.find(function(c) { return f.guess.test(c.title || ''); });
+        sel.value = guess ? guess.id : (f.special || '');
+      }
+      if (f.required && !sel.value) needsReview = true;
+    });
+    setColumnMapExpanded(needsReview);
+  }
+
+  function setColumnMapExpanded(expanded) {
+    document.getElementById('colMapBody').classList.toggle('hidden', !expanded);
+    document.getElementById('colMapCaret').textContent = expanded ? 'Hide ▴' : 'Review ▾';
+  }
+
+  function toggleColumnMap() {
+    var isHidden = document.getElementById('colMapBody').classList.contains('hidden');
+    setColumnMapExpanded(isHidden);
+  }
+
+  function saveColumnMap() {
+    var map = {};
+    MON_MAP_FIELDS.forEach(function(f) { map[f.id] = document.getElementById(f.id).value; });
+    localStorage.setItem(monMapKey(), JSON.stringify(map));
+    return map;
+  }
+
+  function loadMondayItems() {
+    var status = document.getElementById('mItemsStatus');
+    var map = saveColumnMap();
+    var neededIds = [];
+    Object.keys(map).forEach(function(k) {
+      var v = map[k];
+      if (v && v !== '__name__' && neededIds.indexOf(v) === -1) neededIds.push(v);
+    });
+    status.textContent = 'Loading items…';
+    document.getElementById('mItemsChecklistWrap').classList.add('hidden');
+    var query = neededIds.length
+      ? 'query($boardId: [ID!], $colIds: [String!]) { boards(ids: $boardId) { items_page(limit: 500) { items { id name column_values(ids: $colIds) { id text } } } } }'
+      : 'query($boardId: [ID!]) { boards(ids: $boardId) { items_page(limit: 500) { items { id name } } } }';
+    var vars = neededIds.length ? { boardId: [selectedMonBoard.id], colIds: neededIds } : { boardId: [selectedMonBoard.id] };
+    mondayApiCall(query, vars).then(function(data) {
+      if (data.errors && data.errors.length) { status.textContent = 'Monday.com error: ' + data.errors[0].message; return; }
+      var board = data.data && data.data.boards && data.data.boards[0];
+      var rawItems = (board && board.items_page && board.items_page.items) || [];
+      function fieldVal(it, key) {
+        var colId = map[key];
+        if (!colId) return '';
+        if (colId === '__name__') return it.name || '';
+        var cv = (it.column_values || []).find(function(c) { return c.id === colId; });
+        return (cv && cv.text) || '';
+      }
+      var VISIBLE_STATUSES = ['received', 'staged'];
+      var visibleItems = rawItems.filter(function(it) {
+        if (!map.mMapStatus) return true;
+        var sv = fieldVal(it, 'mMapStatus').trim().toLowerCase();
+        return VISIBLE_STATUSES.indexOf(sv) > -1;
+      });
+      var hiddenCount = rawItems.length - visibleItems.length;
+      monLoadedItems = visibleItems.map(function(it) {
+        return {
+          id: it.id,
+          name: it.name,
+          selected: true,
+          vendor: fieldVal(it, 'mMapVendor'),
+          desc: fieldVal(it, 'mMapDesc') || it.name || '',
+          qty: fieldVal(it, 'mMapQty'),
+          unit: fieldVal(it, 'mMapUnit'),
+          po: fieldVal(it, 'mMapPo'),
+          statusText: fieldVal(it, 'mMapStatus')
+        };
+      });
+      status.textContent = monLoadedItems.length
+        ? monLoadedItems.length + ' item(s) loaded — check off which to include.' + (hiddenCount ? ' (' + hiddenCount + ' item(s) not Received/Staged hidden)' : '')
+        : (hiddenCount ? 'No items on this board are Received or Staged.' : 'Board returned no items.');
+      renderMonItemsChecklist();
+      document.getElementById('mItemsChecklistWrap').classList.toggle('hidden', !monLoadedItems.length);
+    }).catch(function(err) {
+      status.textContent = 'Could not load items: ' + (err && err.message ? err.message : String(err));
+    });
+  }
+
+  function renderMonItemsChecklist() {
+    var box = document.getElementById('mItemsChecklist');
+    box.innerHTML = monLoadedItems.map(function(it, i) {
+      var sub = [it.vendor, (it.qty ? (it.qty + (it.unit ? ' ' + it.unit : '')) : ''), it.po, it.statusText].filter(Boolean).join(' · ');
+      return '<label class="mon-check-row">'
+        + '<input type="checkbox" ' + (it.selected ? 'checked' : '') + ' onchange="toggleMonItem(' + i + ', this.checked)">'
+        + '<div><div class="mi-name">' + esc(it.desc || it.name) + '</div>'
+        + (sub ? '<div class="mi-sub">' + esc(sub) + '</div>' : '') + '</div>'
+        + '</label>';
+    }).join('');
+  }
+
+  function toggleMonItem(i, checked) { if (monLoadedItems[i]) monLoadedItems[i].selected = checked; }
+
+  function selectAllMonItems(val) {
+    monLoadedItems.forEach(function(it) { it.selected = val; });
+    renderMonItemsChecklist();
+  }
+
+  function addMondayItemsToDelivery() {
+    var chosen = monLoadedItems.filter(function(it) { return it.selected; });
+    if (!chosen.length) { toast('Select at least one item', 'var(--red)'); return; }
+    pendingMonday = {
+      boardId: selectedMonBoard.id,
+      boardName: selectedMonBoard.name,
+      dateOutCol: document.getElementById('mMapDateOut').value || '',
+      statusCol: document.getElementById('mMapStatus').value || '',
+      recvByCol: document.getElementById('mMapReceivedBy').value || '',
+      deliveredByCol: document.getElementById('mMapDeliveredBy').value || '',
+      deliveredToCol: document.getElementById('mMapDeliveredTo').value || '',
+      notesCol: document.getElementById('mMapDeliveryNotes').value || '',
+      itemIds: chosen.map(function(it) { return it.id; })
+    };
+    resetForm();
+    resetItems(chosen.map(function(it) {
+      return { vendor: it.vendor, desc: it.desc, qty: it.qty, unit: it.unit, po: it.po };
+    }));
+    showNewFormArea();
+    toast(chosen.length + ' item(s) added from Monday.com');
+  }
+
+  function changeMondayColumn(boardId, itemId, columnId, valueJson) {
+    var mutation = 'mutation($boardId: ID!, $itemId: ID!, $columnId: String!, $value: JSON!) '
+      + '{ change_column_value(board_id: $boardId, item_id: $itemId, column_id: $columnId, value: $value) { id } }';
+    return mondayApiCall(mutation, { boardId: boardId, itemId: itemId, columnId: columnId, value: valueJson })
+      .then(function(data) {
+        if (data.errors && data.errors.length) throw new Error(data.errors[0].message);
+        return data;
+      });
+  }
+
+  function pushMondayUpdates(m, entry) {
+    if (!m || !m.boardId || !m.itemIds || !m.itemIds.length) return;
+    var s = loadSetup();
+    var dateJson = JSON.stringify({ date: entry.date });
+    var statusJson = JSON.stringify({ label: 'Delivered' });
+    var recvByJson = JSON.stringify(entry.recv || '');
+    var deliveredByJson = JSON.stringify(s.hsgRep || '');
+    var deliveredToJson = JSON.stringify(entry.dest || '');
+    var notesJson = JSON.stringify(entry.notes || '');
+    var calls = [];
+    m.itemIds.forEach(function(itemId) {
+      if (m.dateOutCol) calls.push(changeMondayColumn(m.boardId, itemId, m.dateOutCol, dateJson));
+      if (m.statusCol) calls.push(changeMondayColumn(m.boardId, itemId, m.statusCol, statusJson));
+      if (m.recvByCol) calls.push(changeMondayColumn(m.boardId, itemId, m.recvByCol, recvByJson));
+      if (m.deliveredByCol) calls.push(changeMondayColumn(m.boardId, itemId, m.deliveredByCol, deliveredByJson));
+      if (m.deliveredToCol) calls.push(changeMondayColumn(m.boardId, itemId, m.deliveredToCol, deliveredToJson));
+      if (m.notesCol) calls.push(changeMondayColumn(m.boardId, itemId, m.notesCol, notesJson));
+    });
+    if (!calls.length) return;
+    Promise.all(calls).then(function() {
+      toast('Monday.com item(s) updated');
+    }).catch(function(err) {
+      toast('Some Monday.com updates failed: ' + (err && err.message ? err.message : String(err)), 'var(--red)', 6000);
+    });
+  }
+
   function loadProjects() {
     try { return JSON.parse(localStorage.getItem(PROJKEY)) || []; }
     catch (e) { return []; }
@@ -1361,6 +1786,7 @@
     }
     document.getElementById('sInit').value = s.initials || '';
     document.getElementById('sGc').value = s.gc || '';
+    document.getElementById('sOwner').value = s.owner || '';
     document.getElementById('sMToken').value = s.mToken || '';
     document.getElementById('sMBoardId').value = s.mBoardId || '';
     document.getElementById('sMProxyUrl').value = s.mProxyUrl || '';
@@ -1372,14 +1798,13 @@
     updateColumnsHint();
   }
   function saveSetup() {
-    saveSessionProject(
-      document.getElementById('sProject').value.trim(),
-      document.getElementById('sProjectNum').value.trim()
-    );
     localStorage.setItem(SETKEY, JSON.stringify({
+      projectNum: document.getElementById('sProjectNum').value.trim(),
+      project: document.getElementById('sProject').value.trim(),
       hsgRep: document.getElementById('sHsgRep').value.trim(),
       initials: document.getElementById('sInit').value.trim().toUpperCase(),
       gc: document.getElementById('sGc').value.trim(),
+      owner: document.getElementById('sOwner').value.trim(),
       mToken: document.getElementById('sMToken').value.trim(),
       mBoardId: document.getElementById('sMBoardId').value.trim(),
       mProxyUrl: document.getElementById('sMProxyUrl').value.trim(),
@@ -1395,20 +1820,17 @@
   /* ---------- transmittal ---------- */
   function transNo(x, num) {
     var init = (loadSetup().initials || '').toUpperCase();
-    var proj = String(x.projectNum || 'DT').replace(/\s+/g, '');
-    var d = new Date(x.id || Date.now());
-    var pad = function(n) { return String(n).padStart(2, '0'); };
-    var stamp = String(d.getFullYear()).slice(-2) + pad(d.getMonth() + 1) + pad(d.getDate())
-      + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
-    return 'HSG-' + proj + '-' + stamp + (init ? '-' + init : '');
+    var n = x.serial || num;
+    return 'HSG-DT-' + String(x.date || '').replace(/-/g, '')
+      + (init ? '-' + init : '') + '-' + String(n).padStart(3, '0');
   }
 
   function openTrans(id, num) {
     var x = load().find(function(e) { return e.id === id; });
     if (!x) return;
     var s = loadSetup();
-    if (!s.gc) {
-      if (confirm('Company contact is not set. Add it under "Project Info" first?')) {
+    if (!s.gc && !s.owner) {
+      if (confirm('GC and Owner contacts are not set. Add them under "Project Info" first?')) {
         showTab('setup');
         return;
       }
@@ -1424,10 +1846,11 @@
       +   '<div>Issued: ' + esc(today) + '</div></div>'
       + '</div>'
       + '<div class="td-parties">'
-      +   '<div class="td-party"><h3>To — Company</h3><p>' + (esc(s.gc) || '—') + '</p></div>'
-      +   '<div class="td-party"><h3>From — HSG</h3><p>' + (esc(s.hsgRep) || '—') + '</p></div>'
+      +   '<div class="td-party"><h3>To — General Contractor</h3><p>' + (esc(s.gc) || '—') + '</p></div>'
+      +   '<div class="td-party"><h3>To — Owner</h3><p>' + (esc(s.owner) || '—') + '</p></div>'
       + '</div>'
       + '<div class="td-parties">'
+      +   '<div class="td-party"><h3>From — HSG</h3><p>' + (esc(s.hsgRep) || '—') + '</p></div>'
       +   '<div class="td-party"><h3>Project / Site</h3><p>' + (esc(projectLabel(s)) || '—') + '</p></div>'
       + '</div>'
       + '<table class="td-table">'
@@ -1467,28 +1890,33 @@
     currentTrans = null;
   }
 
-  function savePdf() {
-    if (!currentTrans) return;
+  function generateTransPdfBlob() {
+    if (!currentTrans) return null;
     if (!window.jspdf || !window.jspdf.jsPDF) {
       toast('PDF engine failed to load', 'var(--red)');
-      return;
+      return null;
     }
+    var r = buildTransmittalPdf(window.jspdf.jsPDF, currentTrans.x, currentTrans.num, currentTrans.s, transNo(currentTrans.x, currentTrans.num));
+    return { blob: r.doc.output('blob'), tn: r.tn };
+  }
+
+  function savePdf() {
     try {
-      var r = buildTransmittalPdf(window.jspdf.jsPDF, currentTrans.x, currentTrans.num, currentTrans.s, transNo(currentTrans.x, currentTrans.num));
-      var blob = r.doc.output('blob');
-      var fname = r.tn + '.pdf';
+      var gen = generateTransPdfBlob();
+      if (!gen) return;
+      var fname = gen.tn + '.pdf';
       // 1) Native share sheet with the PDF file (best on phones)
       var file = null;
-      try { file = new File([blob], fname, { type: 'application/pdf' }); } catch (e) {}
+      try { file = new File([gen.blob], fname, { type: 'application/pdf' }); } catch (e) {}
       if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
-        navigator.share({ files: [file], title: 'Delivery Transmittal ' + r.tn })
+        navigator.share({ files: [file], title: 'Delivery Transmittal ' + gen.tn })
           .then(function() { toast('PDF shared'); })
           .catch(function(err) {
-            if (err && err.name !== 'AbortError') openPdfFallback(blob, fname);
+            if (err && err.name !== 'AbortError') openPdfFallback(gen.blob, fname);
           });
         return;
       }
-      openPdfFallback(blob, fname);
+      openPdfFallback(gen.blob, fname);
     } catch (err) {
       toast('PDF error: ' + err.message, 'var(--red)');
     }
@@ -2001,9 +2429,10 @@ function buildTransmittalPdf(jsPDF, x, num, s, tnOverride) {
     doc.setTextColor(0, 0, 0);
     doc.text(doc.splitTextToSize(text || '—', bw - 18).slice(0, 3), px + 9, py + 27);
   }
-  party(M, 112, 'To — Company', s.gc || '—');
-  party(M + bw + 12, 112, 'From — HSG', s.hsgRep || '—');
-  party(M, 174, 'Project / Site', projectLabel(s) || '—');
+  party(M, 112, 'To — General Contractor', s.gc || '—');
+  party(M + bw + 12, 112, 'To — Owner', s.owner || '—');
+  party(M, 174, 'From — HSG', s.hsgRep || '—');
+  party(M + bw + 12, 174, 'Project / Site', projectLabel(s) || '—');
 
   // Shared details
   var shared = [
