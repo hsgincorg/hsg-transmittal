@@ -424,7 +424,7 @@
 
 <header>
   <h1>HSG Onsite Delivery Log</h1>
-  <p id="headerSub">v8</p>
+  <p id="headerSub">v8.2</p>
 </header>
 
 <div class="container">
@@ -566,23 +566,34 @@
 
     <div class="card">
       <h2>Equipment Board</h2>
-      <p class="hint">Pick your region, then the project board. The New Delivery tab can then pull equipment straight off that board and write the delivery back to it.</p>
+      <p class="hint">Pick your region, then your project. The app finds the matching receiving board on its own, so the New Delivery tab can pull equipment off it and write the delivery back.</p>
       <label>Region</label>
       <select id="sRegion" onchange="onRegionChange()">
         <option value="">None — manual entry only</option>
         <option value="10315932">Central Texas — Ward Receiving</option>
         <option value="17345263">North Texas — Armstrong Receiving</option>
       </select>
-      <button type="button" class="btn btn-secondary" style="margin-top:10px" onclick="loadRegionBoards()">Load Project Boards</button>
-      <p class="hint" id="rBoardStatus" style="margin-top:8px">No region selected.</p>
-      <div id="rBoardPickWrap" class="hidden">
-        <label style="margin-top:10px">Project Board</label>
+
+      <div id="eqProjWrap" class="hidden">
+        <label style="margin-top:12px">Project</label>
         <div class="ac-wrap">
-          <input type="text" id="rBoardSearch" placeholder="Search by project number or name" autocomplete="off" oninput="filterBoards()" onfocus="filterBoards()">
+          <input type="text" id="eqProjSearch" placeholder="Search by project number or name" autocomplete="off" oninput="filterEqProjects()" onfocus="filterEqProjects()">
+          <div class="ac-list" id="acEqProj"></div>
+        </div>
+        <p class="hint" id="eqProjHint" style="margin-top:4px"></p>
+      </div>
+
+      <p class="hint" id="rBoardStatus" style="margin-top:8px">No region selected.</p>
+
+      <div id="rBoardPickWrap" class="hidden">
+        <label style="margin-top:6px">Receiving Board</label>
+        <div class="ac-wrap">
+          <input type="text" id="rBoardSearch" placeholder="Search boards by number or name" autocomplete="off" oninput="filterBoards()" onfocus="filterBoards()">
           <div class="ac-list" id="acBoard"></div>
         </div>
       </div>
       <p class="hint" id="rBoardChosen" style="margin-top:8px"></p>
+      <button type="button" class="btn btn-secondary hidden" id="eqChangeBtn" style="margin-top:8px" onclick="showBoardPicker()">Change Receiving Board</button>
     </div>
 
     <div class="card">
@@ -1159,6 +1170,9 @@
       if (!numColId) {
         columns.forEach(function(c) { if (!numColId && /number|proj.*#|^#$/i.test(c.title || '')) numColId = c.id; });
       }
+      var officeColId = null;
+      columns.forEach(function(c) { if (!officeColId && /^office$/i.test((c.title || '').trim())) officeColId = c.id; });
+
       var nameColId = findColumnByTitle(columns, nameColOverride);
       if (nameColOverride && !nameColId) toast('Name column "' + nameColOverride + '" not found — check spelling against the list below', 'var(--red)');
       if (!nameColId) {
@@ -1169,6 +1183,7 @@
       var neededIds = [];
       if (numColId) neededIds.push(numColId);
       if (nameColId && nameColId !== numColId) neededIds.push(nameColId);
+      if (officeColId && neededIds.indexOf(officeColId) === -1) neededIds.push(officeColId);
       var itemsQuery = neededIds.length
         ? 'query($boardId: [ID!], $colIds: [String!]) { boards(ids: $boardId) { items_page(limit: 500) { items { id name column_values(ids: $colIds) { id text } } } } }'
         : 'query($boardId: [ID!]) { boards(ids: $boardId) { items_page(limit: 500) { items { id name } } } }';
@@ -1190,7 +1205,12 @@
             var cvn = cvs.find(function(c) { return c.id === nameColId; });
             if (cvn && cvn.text) nameVal = cvn.text;
           }
-          return { num: numVal, name: nameVal };
+          var officeVal = '';
+          if (officeColId) {
+            var cvo = cvs.find(function(c) { return c.id === officeColId; });
+            if (cvo && cvo.text) officeVal = cvo.text.trim();
+          }
+          return { num: numVal, name: nameVal, office: officeVal };
         });
         if (!list.length) { toast('Board returned no items', 'var(--red)'); return; }
         saveProjects(list);
@@ -1221,11 +1241,20 @@
   var BOARDKEY = 'hsg_mvp_region_boards';
   var eqRows = [];
 
+  // Prefer whatever is currently typed in the setup fields, then fall back to
+  // saved settings. Stops "no proxy saved" errors when the field is filled in
+  // but Sync Now / Save Project Info hasn't been tapped yet.
+  function liveField(id, saved) {
+    var el = document.getElementById(id);
+    var v = el && el.value ? el.value.trim() : '';
+    return v || (saved || '').trim();
+  }
+
   function mondayGQL(query, variables) {
     var s = loadSetup();
-    var proxy = (s.mProxyUrl || '').trim();
-    var token = (s.mToken || '').trim();
-    if (!proxy && !token) return Promise.reject(new Error('No Sync Proxy URL or token saved — set one in the sync section above'));
+    var proxy = liveField('sMProxyUrl', s.mProxyUrl);
+    var token = liveField('sMToken', s.mToken);
+    if (!proxy && !token) return Promise.reject(new Error('No Sync Proxy URL set — enter it in the Monday.com Project List card above, then try again'));
     var headers = { 'Content-Type': 'application/json' };
     if (!proxy) headers['Authorization'] = token;
     return fetch(proxy || 'https://api.monday.com/v2', {
@@ -1259,66 +1288,215 @@
     catch (e) { return {}; }
   }
 
+  // which Office label on the tracker board corresponds to each region
+  var REGION_OFFICE = { '10315932': 'austin', '17345263': 'dallas' };
+
   function onRegionChange(quiet) {
     var ws = document.getElementById('sRegion').value;
     var st = document.getElementById('rBoardStatus');
-    var wrap = document.getElementById('rBoardPickWrap');
+    document.getElementById('acEqProj').classList.remove('show');
+    document.getElementById('acBoard').classList.remove('show');
+    document.getElementById('rBoardPickWrap').classList.add('hidden');
+
     if (!ws) {
-      st.textContent = 'No region selected.';
-      wrap.classList.add('hidden');
+      document.getElementById('eqProjWrap').classList.add('hidden');
+      document.getElementById('eqChangeBtn').classList.add('hidden');
       document.getElementById('rBoardChosen').textContent = '';
-      if (!quiet) { var c = loadSetup(); c.eqBoardId = ''; c.eqBoardName = ''; localStorage.setItem(SETKEY, JSON.stringify(c)); }
+      st.textContent = 'No region selected.';
+      if (!quiet) {
+        var c0 = loadSetup();
+        c0.eqBoardId = ''; c0.eqBoardName = ''; c0.region = '';
+        localStorage.setItem(SETKEY, JSON.stringify(c0));
+      }
       updateEqBlock();
       return;
     }
-    var cache = loadBoardCache()[ws];
-    if (cache && cache.length) {
-      st.textContent = cache.length + ' project boards loaded for ' + REGION_NAMES[ws] + '.';
-      wrap.classList.remove('hidden');
+
+    document.getElementById('eqProjWrap').classList.remove('hidden');
+    var projs = regionProjects(ws);
+    var all = loadProjects();
+    if (!all.length) {
+      document.getElementById('eqProjHint').innerHTML =
+        '<span style="color:var(--red)">No project list on this device yet — run Sync Now above first.</span>';
+    } else if (!hasOfficeData(all)) {
+      document.getElementById('eqProjHint').textContent =
+        all.length + ' projects (not filtered by region — run Sync Now again to pick up the Office column).';
     } else {
-      st.textContent = REGION_NAMES[ws] + ' — tap Load Project Boards.';
-      wrap.classList.add('hidden');
+      document.getElementById('eqProjHint').textContent =
+        projs.length + ' ' + REGION_NAMES[ws].split('—')[0].trim() + ' projects.';
     }
-    var s = loadSetup();
-    document.getElementById('rBoardChosen').innerHTML = s.eqBoardName
-      ? 'Selected board: <b>' + esc(s.eqBoardName) + '</b>'
-      : '';
+
+    var s2 = loadSetup();
+    if (s2.eqBoardName) {
+      document.getElementById('rBoardChosen').innerHTML = 'Receiving board: <b>' + esc(s2.eqBoardName) + '</b>';
+      document.getElementById('eqChangeBtn').classList.remove('hidden');
+      st.textContent = REGION_NAMES[ws] + '.';
+    } else {
+      document.getElementById('rBoardChosen').textContent = '';
+      document.getElementById('eqChangeBtn').classList.add('hidden');
+      st.textContent = REGION_NAMES[ws] + ' — pick a project below.';
+    }
     updateEqBlock();
   }
 
-  function loadRegionBoards() {
+  function hasOfficeData(list) {
+    return list.some(function(p) { return (p.office || '').trim(); });
+  }
+
+  function regionProjects(ws) {
+    var all = loadProjects();
+    var want = REGION_OFFICE[ws];
+    if (!want || !hasOfficeData(all)) return all;
+    return all.filter(function(p) { return (p.office || '').trim().toLowerCase() === want; });
+  }
+
+  /* ---- project autocomplete (from the Active Project Tracker list) ---- */
+  var eqProjMatches = [];
+
+  function filterEqProjects() {
     var ws = document.getElementById('sRegion').value;
-    if (!ws) { toast('Pick a region first', 'var(--red)'); return; }
-    toast('Loading project boards…');
+    if (!ws) return;
+    var list = regionProjects(ws);
+    var q = document.getElementById('eqProjSearch').value.trim().toLowerCase();
+    var box = document.getElementById('acEqProj');
+    var hits = (q ? list.filter(function(p) {
+      return (p.num || '').toLowerCase().indexOf(q) > -1 || (p.name || '').toLowerCase().indexOf(q) > -1;
+    }) : list).slice(0, 30);
+    eqProjMatches = hits;
+    if (!hits.length) {
+      box.innerHTML = '<div class="ac-item ac-empty">No matches</div>';
+      box.classList.add('show');
+      return;
+    }
+    box.innerHTML = hits.map(function(p, i) {
+      return '<div class="ac-item" onmousedown="pickEqProject(' + i + ')">'
+        + (p.num ? '<b>' + esc(p.num) + '</b> — ' : '') + esc(p.name || '') + '</div>';
+    }).join('');
+    box.classList.add('show');
+  }
+
+  function pickEqProject(i) {
+    var pr = eqProjMatches[i];
+    if (!pr) return;
+    var ws = document.getElementById('sRegion').value;
+    var c = loadSetup();
+    c.region = ws;
+    c.projectNum = pr.num || '';
+    c.project = pr.name || '';
+    c.eqBoardId = '';
+    c.eqBoardName = '';
+    localStorage.setItem(SETKEY, JSON.stringify(c));
+    document.getElementById('sProjectNum').value = c.projectNum;
+    document.getElementById('sProject').value = c.project;
+    document.getElementById('eqProjSearch').value = (pr.num ? pr.num + ' — ' : '') + (pr.name || '');
+    document.getElementById('acEqProj').classList.remove('show');
+    document.getElementById('rBoardChosen').textContent = '';
+    document.getElementById('eqChangeBtn').classList.add('hidden');
+    updateHeaderSub();
+    updateEqBlock();
+    matchBoardForProject(ws, pr.num || '');
+  }
+
+  /* ---- receiving boards for a region (cached per workspace) ---- */
+  function ensureBoards(ws, force) {
+    var cache = loadBoardCache();
+    if (!force && cache[ws] && cache[ws].length) return Promise.resolve(cache[ws]);
+    // commit on-screen credentials so this device stays configured
+    var c = loadSetup();
+    c.mProxyUrl = liveField('sMProxyUrl', c.mProxyUrl);
+    c.mToken = liveField('sMToken', c.mToken);
+    c.region = ws;
+    localStorage.setItem(SETKEY, JSON.stringify(c));
     var q = 'query($ws: [ID!]) { boards(workspace_ids: $ws, limit: 300, state: active) { id name } }';
-    mondayGQL(q, { ws: [ws] }).then(function(d) {
-      var all = (d && d.boards) || [];
-      var list = all.filter(function(b) { return isProjectBoard(b.name); }).map(function(b) {
-        var p = parseBoardName(b.name);
-        return { id: b.id, raw: b.name, num: p.num, name: p.name, owner: p.owner };
-      });
+    return mondayGQL(q, { ws: [ws] }).then(function(d) {
+      var list = ((d && d.boards) || []).filter(function(b) { return isProjectBoard(b.name); })
+        .map(function(b) {
+          var pn = parseBoardName(b.name);
+          return { id: b.id, raw: b.name, num: pn.num, name: pn.name, owner: pn.owner };
+        });
       list.sort(function(a, b) {
         var an = parseInt(a.num, 10), bn = parseInt(b.num, 10);
         if (!isNaN(an) && !isNaN(bn) && an !== bn) return an - bn;
         return (a.raw || '').localeCompare(b.raw || '');
       });
-      var cache = loadBoardCache();
-      cache[ws] = list;
-      localStorage.setItem(BOARDKEY, JSON.stringify(cache));
-      if (!list.length) {
-        document.getElementById('rBoardStatus').textContent =
-          'No project boards found in ' + REGION_NAMES[ws] + ' (templates and subitem boards are skipped).';
-        document.getElementById('rBoardPickWrap').classList.add('hidden');
-        toast('No project boards in that workspace yet', 'var(--red)', 6000);
-        return;
-      }
-      onRegionChange(true);
-      toast(list.length + ' project boards loaded');
-    }).catch(function(err) {
-      toast('Could not load boards: ' + (err && err.message ? err.message : String(err)), 'var(--red)', 7000);
+      var cc = loadBoardCache();
+      cc[ws] = list;
+      localStorage.setItem(BOARDKEY, JSON.stringify(cc));
+      return list;
     });
   }
 
+  function sameProjectNum(a, b) {
+    a = String(a || '').replace(/[^0-9]/g, '');
+    b = String(b || '').replace(/[^0-9]/g, '');
+    return a !== '' && a === b;
+  }
+
+  function matchBoardForProject(ws, num) {
+    var st = document.getElementById('rBoardStatus');
+    st.textContent = 'Looking for the receiving board…';
+    ensureBoards(ws).then(function(list) {
+      if (!list.length) {
+        st.innerHTML = '<span style="color:var(--red)">No project boards in ' + esc(REGION_NAMES[ws])
+          + ' yet — enter items by hand for now.</span>';
+        return;
+      }
+      var hit = null;
+      list.forEach(function(b) { if (!hit && sameProjectNum(b.num, num)) hit = b; });
+      if (hit) {
+        setBoard(hit);
+        st.innerHTML = 'Matched automatically on project number <b>' + esc(num) + '</b>.';
+        toast('Receiving board matched');
+      } else {
+        st.innerHTML = '<span style="color:var(--red)">No board in ' + esc(REGION_NAMES[ws])
+          + ' matches project ' + esc(num || '(none)') + ' — pick one below.</span>';
+        document.getElementById('rBoardPickWrap').classList.remove('hidden');
+        document.getElementById('rBoardSearch').value = '';
+        toast('No matching board — pick one', 'var(--red)', 6000);
+      }
+    }).catch(function(err) {
+      var m = (err && err.message) ? err.message : String(err);
+      if (/load failed|failed to fetch|networkerror/i.test(m)) {
+        m = 'could not reach Monday.com — check the Sync Proxy URL or token above, and your signal';
+      }
+      st.innerHTML = '<span style="color:var(--red)">Could not load boards: ' + esc(m) + '</span>';
+      toast('Could not load boards: ' + m, 'var(--red)', 8000);
+    });
+  }
+
+  function setBoard(b) {
+    var c = loadSetup();
+    c.eqBoardId = b.id;
+    c.eqBoardName = b.raw;
+    c.region = document.getElementById('sRegion').value;
+    localStorage.setItem(SETKEY, JSON.stringify(c));
+    document.getElementById('rBoardChosen').innerHTML = 'Receiving board: <b>' + esc(b.raw) + '</b>';
+    document.getElementById('rBoardPickWrap').classList.add('hidden');
+    document.getElementById('eqChangeBtn').classList.remove('hidden');
+    eqRows = [];
+    var el = document.getElementById('eqList');
+    if (el) el.innerHTML = '';
+    var ab = document.getElementById('eqAddBtn');
+    if (ab) ab.classList.add('hidden');
+    updateEqBlock();
+  }
+
+  function showBoardPicker() {
+    var ws = document.getElementById('sRegion').value;
+    if (!ws) { toast('Pick a region first', 'var(--red)'); return; }
+    toast('Loading boards…');
+    ensureBoards(ws, true).then(function(list) {
+      if (!list.length) { toast('No project boards in that workspace yet', 'var(--red)', 6000); return; }
+      document.getElementById('rBoardPickWrap').classList.remove('hidden');
+      document.getElementById('rBoardSearch').value = '';
+      document.getElementById('rBoardStatus').textContent = list.length + ' boards — pick one below.';
+      filterBoards();
+    }).catch(function(err) {
+      toast('Could not load boards: ' + (err && err.message ? err.message : String(err)), 'var(--red)', 8000);
+    });
+  }
+
+  /* ---- manual board override ---- */
   var boardMatches = [];
 
   function filterBoards() {
@@ -1337,34 +1515,20 @@
       return;
     }
     box.innerHTML = hits.map(function(b, i) {
-      var label = (b.num ? '<b>' + esc(b.num) + '</b> — ' : '') + esc(b.name || b.raw)
-        + (b.owner ? ' <span class="hint">(' + esc(b.owner) + ')</span>' : '');
-      return '<div class="ac-item" onmousedown="pickBoard(' + i + ')">' + label + '</div>';
+      return '<div class="ac-item" onmousedown="pickBoard(' + i + ')">'
+        + (b.num ? '<b>' + esc(b.num) + '</b> — ' : '') + esc(b.name || b.raw)
+        + (b.owner ? ' <span class="hint">(' + esc(b.owner) + ')</span>' : '') + '</div>';
     }).join('');
     box.classList.add('show');
   }
 
   function pickBoard(i) {
-    var box = document.getElementById('acBoard');
     var b = boardMatches[i];
     if (!b) return;
-    var c = loadSetup();
-    c.eqBoardId = b.id;
-    c.eqBoardName = b.raw;
-    c.region = document.getElementById('sRegion').value;
-    if (b.num) c.projectNum = b.num;
-    if (b.name) c.project = b.name;
-    localStorage.setItem(SETKEY, JSON.stringify(c));
-    document.getElementById('sProjectNum').value = c.projectNum || '';
-    document.getElementById('sProject').value = c.project || '';
+    document.getElementById('acBoard').classList.remove('show');
     document.getElementById('rBoardSearch').value = '';
-    box.classList.remove('show');
-    document.getElementById('rBoardChosen').innerHTML = 'Selected board: <b>' + esc(b.raw) + '</b>';
-    eqRows = [];
-    document.getElementById('eqList').innerHTML = '';
-    document.getElementById('eqAddBtn').classList.add('hidden');
-    updateEqBlock();
-    updateHeaderSub();
+    setBoard(b);
+    document.getElementById('rBoardStatus').textContent = 'Receiving board set by hand.';
     toast('Board set — ' + (b.num || b.raw));
   }
 
@@ -1652,6 +1816,8 @@
     document.getElementById('acName').classList.remove('show');
     var ab = document.getElementById('acBoard');
     if (ab) ab.classList.remove('show');
+    var ap = document.getElementById('acEqProj');
+    if (ap) ap.classList.remove('show');
   }
   document.addEventListener('click', function(e) {
     if (!e.target.closest || !e.target.closest('.ac-wrap')) hideProjectLists();
@@ -1667,7 +1833,7 @@
     var bits = [];
     if (s.gc) bits.push('Contractor: ' + s.gc);
     if (s.project) bits.push(projectLabel(s));
-    document.getElementById('headerSub').textContent = bits.length ? bits.join(' · ') + ' · v8' : 'v8';
+    document.getElementById('headerSub').textContent = bits.length ? bits.join(' · ') + ' · v8.2' : 'v8.2';
   }
 
   function onHsgRepPick() {
