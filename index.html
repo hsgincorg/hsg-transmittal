@@ -424,7 +424,7 @@
 
 <header>
   <h1>HSG Onsite Delivery Log</h1>
-  <p id="headerSub">v8.3</p>
+  <p id="headerSub">v8.5</p>
 </header>
 
 <div class="container">
@@ -592,8 +592,11 @@
           <div class="ac-list" id="acBoard"></div>
         </div>
       </div>
-      <p class="hint" id="rBoardChosen" style="margin-top:8px"></p>
-      <button type="button" class="btn btn-secondary hidden" id="eqChangeBtn" style="margin-top:8px" onclick="showBoardPicker()">Change Receiving Board</button>
+      <div id="rBoardBox" class="hidden" style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-top:10px">
+        <p class="hint" id="rBoardHow" style="margin:0 0 2px">Matched receiving board</p>
+        <div id="rBoardChosen" style="font-weight:700;font-size:14px;word-break:break-word"></div>
+        <button type="button" class="btn btn-secondary" style="margin-top:10px" onclick="showBoardPicker()">Change Receiving Board</button>
+      </div>
     </div>
 
     <div class="card">
@@ -1309,6 +1312,15 @@
   // which Office label on the tracker board corresponds to each region
   var REGION_OFFICE = { '10315932': 'austin', '17345263': 'dallas' };
 
+  // Show (or hide) the resolved receiving board.
+  function showChosenBoard(name, how) {
+    var box = document.getElementById('rBoardBox');
+    if (!name) { box.classList.add('hidden'); return; }
+    document.getElementById('rBoardHow').textContent = how || 'Receiving board';
+    document.getElementById('rBoardChosen').textContent = name;
+    box.classList.remove('hidden');
+  }
+
   function onRegionChange(quiet) {
     var ws = document.getElementById('sRegion').value;
     var st = document.getElementById('rBoardStatus');
@@ -1316,10 +1328,17 @@
     document.getElementById('acBoard').classList.remove('show');
     document.getElementById('rBoardPickWrap').classList.add('hidden');
 
+    // Only drop the chosen board when the region genuinely changed. Re-touching
+    // the dropdown on the same region should not undo a match.
+    var prev = loadSetup();
+    if (!quiet && prev.region && prev.region !== ws) {
+      prev.eqBoardId = ''; prev.eqBoardName = '';
+      localStorage.setItem(SETKEY, JSON.stringify(prev));
+    }
+
     if (!ws) {
       document.getElementById('eqProjWrap').classList.add('hidden');
-      document.getElementById('eqChangeBtn').classList.add('hidden');
-      document.getElementById('rBoardChosen').textContent = '';
+      showChosenBoard('');
       st.textContent = 'No region selected.';
       if (!quiet) {
         var c0 = loadSetup();
@@ -1333,9 +1352,14 @@
     document.getElementById('eqProjWrap').classList.remove('hidden');
     var projs = regionProjects(ws);
     var all = loadProjects();
+    var named = all.filter(function(p) { return (p.name || '').trim(); }).length;
     if (!all.length) {
       document.getElementById('eqProjHint').innerHTML =
         '<span style="color:var(--red)">No project list on this device yet — run Sync Now above first.</span>';
+    } else if (named === 0) {
+      document.getElementById('eqProjHint').innerHTML =
+        '<span style="color:var(--red)">Project names are blank in the saved list. Type <b>3</b> into '
+        + 'Name Column above, then tap Sync Now.</span>';
     } else if (!hasOfficeData(all)) {
       document.getElementById('eqProjHint').textContent =
         all.length + ' projects (not filtered by region — run Sync Now again to pick up the Office column).';
@@ -1345,13 +1369,16 @@
     }
 
     var s2 = loadSetup();
+    // keep the Project box showing the saved project across reloads
+    var pbox = document.getElementById('eqProjSearch');
+    if (pbox && !pbox.value && (s2.projectNum || s2.project)) {
+      pbox.value = (s2.projectNum ? s2.projectNum + ' — ' : '') + (s2.project || '');
+    }
     if (s2.eqBoardName) {
-      document.getElementById('rBoardChosen').innerHTML = 'Receiving board: <b>' + esc(s2.eqBoardName) + '</b>';
-      document.getElementById('eqChangeBtn').classList.remove('hidden');
+      showChosenBoard(s2.eqBoardName, 'Receiving board');
       st.textContent = REGION_NAMES[ws] + '.';
     } else {
-      document.getElementById('rBoardChosen').textContent = '';
-      document.getElementById('eqChangeBtn').classList.add('hidden');
+      showChosenBoard('');
       st.textContent = REGION_NAMES[ws] + ' — pick a project below.';
     }
     updateEqBlock();
@@ -1408,17 +1435,28 @@
     document.getElementById('sProject').value = c.project;
     document.getElementById('eqProjSearch').value = (pr.num ? pr.num + ' — ' : '') + (pr.name || '');
     document.getElementById('acEqProj').classList.remove('show');
-    document.getElementById('rBoardChosen').textContent = '';
-    document.getElementById('eqChangeBtn').classList.add('hidden');
+    showChosenBoard('');
     updateHeaderSub();
     updateEqBlock();
     matchBoardForProject(ws, pr.num || '');
   }
 
   /* ---- receiving boards for a region (cached per workspace) ---- */
+  // Cached boards store the raw Monday name. Always re-derive the number and
+  // name from it on read, so an old cache can never hold a stale parse.
+  function normalizeBoards(list) {
+    return (list || []).filter(function(b) { return b && b.raw && isProjectBoard(b.raw); })
+      .map(function(b) {
+        var pn = parseBoardName(b.raw);
+        return { id: b.id, raw: b.raw, num: pn.num, name: pn.name, owner: pn.owner };
+      });
+  }
+
   function ensureBoards(ws, force) {
     var cache = loadBoardCache();
-    if (!force && cache[ws] && cache[ws].length) return Promise.resolve(cache[ws]);
+    if (!force && cache[ws] && cache[ws].length) {
+      return Promise.resolve(normalizeBoards(cache[ws]));
+    }
     // commit on-screen credentials so this device stays configured
     var c = loadSetup();
     c.mProxyUrl = liveField('sMProxyUrl', c.mProxyUrl);
@@ -1462,9 +1500,9 @@
       var hit = null;
       list.forEach(function(b) { if (!hit && sameProjectNum(b.num, num)) hit = b; });
       if (hit) {
-        setBoard(hit);
-        st.innerHTML = 'Matched automatically on project number <b>' + esc(num) + '</b>.';
-        toast('Receiving board matched');
+        setBoard(hit, 'Matched on project number ' + num);
+        st.textContent = '';
+        toast('Receiving board matched — ' + hit.raw);
       } else {
         st.innerHTML = '<span style="color:var(--red)">No board in ' + esc(REGION_NAMES[ws])
           + ' matches project ' + esc(num || '(none)') + ' — pick one below.</span>';
@@ -1482,15 +1520,14 @@
     });
   }
 
-  function setBoard(b) {
+  function setBoard(b, how) {
     var c = loadSetup();
     c.eqBoardId = b.id;
     c.eqBoardName = b.raw;
     c.region = document.getElementById('sRegion').value;
     localStorage.setItem(SETKEY, JSON.stringify(c));
-    document.getElementById('rBoardChosen').innerHTML = 'Receiving board: <b>' + esc(b.raw) + '</b>';
+    showChosenBoard(b.raw, how || 'Receiving board');
     document.getElementById('rBoardPickWrap').classList.add('hidden');
-    document.getElementById('eqChangeBtn').classList.remove('hidden');
     eqRows = [];
     var el = document.getElementById('eqList');
     if (el) el.innerHTML = '';
@@ -1519,7 +1556,7 @@
 
   function filterBoards() {
     var ws = document.getElementById('sRegion').value;
-    var list = loadBoardCache()[ws] || [];
+    var list = normalizeBoards(loadBoardCache()[ws] || []);
     var q = document.getElementById('rBoardSearch').value.trim().toLowerCase();
     var box = document.getElementById('acBoard');
     var hits = list.filter(function(b) {
@@ -1545,9 +1582,9 @@
     if (!b) return;
     document.getElementById('acBoard').classList.remove('show');
     document.getElementById('rBoardSearch').value = '';
-    setBoard(b);
-    document.getElementById('rBoardStatus').textContent = 'Receiving board set by hand.';
-    toast('Board set — ' + (b.num || b.raw));
+    setBoard(b, 'Chosen by hand');
+    document.getElementById('rBoardStatus').textContent = '';
+    toast('Board set — ' + b.raw);
   }
 
   function updateEqBlock() {
@@ -1851,7 +1888,7 @@
     var bits = [];
     if (s.gc) bits.push('Contractor: ' + s.gc);
     if (s.project) bits.push(projectLabel(s));
-    document.getElementById('headerSub').textContent = bits.length ? bits.join(' · ') + ' · v8.3' : 'v8.3';
+    document.getElementById('headerSub').textContent = bits.length ? bits.join(' · ') + ' · v8.5' : 'v8.5';
   }
 
   function onHsgRepPick() {
