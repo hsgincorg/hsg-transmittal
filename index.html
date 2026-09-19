@@ -212,6 +212,10 @@
     cursor: pointer;
   }
   .photo-empty-hint { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .photo-actions { display: flex; gap: 8px; margin-bottom: 4px; }
+  .photo-actions .btn-add { margin-bottom: 0; }
+  .photo-actions .btn-add.photo-cam { flex: 1.35; background: var(--navy); color: #fff; border-style: solid; }
+  .photo-actions .btn-add.photo-lib { flex: 1; }
   .ac-wrap { position: relative; }
   .ac-list {
     position: absolute;
@@ -424,7 +428,7 @@
 
 <header>
   <h1>HSG Onsite Delivery Log</h1>
-  <p id="headerSub">v8.5</p>
+  <p id="headerSub">v8.6</p>
 </header>
 
 <div class="container">
@@ -501,8 +505,12 @@
         <label>Delivery Photos</label>
         <div id="photoGrid" class="photo-grid"></div>
         <div class="photo-empty-hint" id="photoHint">No photos added yet.</div>
-        <input type="file" id="fPhotoInput" accept="image/*" capture="environment" style="display:none" onchange="handlePhotoInput(event)">
-        <button type="button" class="btn-add" onclick="document.getElementById('fPhotoInput').click()">+ Take / Add Photo</button>
+        <input type="file" id="fPhotoCam" accept="image/*" capture="environment" style="display:none" onchange="handlePhotoInput(event)">
+        <input type="file" id="fPhotoLib" accept="image/*" multiple style="display:none" onchange="handlePhotoInput(event)">
+        <div class="photo-actions">
+          <button type="button" class="btn-add photo-cam" onclick="openCamera()">📷 Take Photo</button>
+          <button type="button" class="btn-add photo-lib" onclick="openLibrary()">Choose from Library</button>
+        </div>
 
         <button type="submit" class="btn btn-primary" id="saveBtn">Save Delivery</button>
         <button type="button" class="btn btn-secondary hidden" id="cancelEdit" onclick="cancelEdit()">Cancel Edit</button>
@@ -751,20 +759,47 @@
   var photosData = []; // dataURLs currently attached to the form
   var MAX_PHOTO_DIM = 1600;
   var PHOTO_QUALITY = 0.72;
+  var MAX_PHOTOS = 12; // guards the browser's storage limit; raise with care
+
+  function openCamera() { document.getElementById('fPhotoCam').click(); }
+  function openLibrary() { document.getElementById('fPhotoLib').click(); }
+
+  // Some library picks (HEIC on iOS, odd Android pickers) report a blank
+  // MIME type, so fall back to the file extension before rejecting.
+  function isImageFile(f) {
+    if (f && /^image\//.test(f.type || '')) return true;
+    return /\.(jpe?g|png|gif|webp|bmp|heic|heif)$/i.test((f && f.name) || '');
+  }
 
   function handlePhotoInput(e) {
-    var files = e.target.files;
+    var input = e.target;
+    var files = input.files;
+    input.value = ''; // allow re-picking the same shot
     if (!files || !files.length) return;
-    Array.prototype.forEach.call(files, function(f) {
-      if (!/^image\//.test(f.type)) return;
-      compressImage(f, function(dataUrl) {
+
+    var queue = Array.prototype.filter.call(files, isImageFile);
+    if (!queue.length) { toast('No usable images in that selection', 'var(--red)'); return; }
+
+    var room = MAX_PHOTOS - photosData.length;
+    if (room <= 0) { toast('Photo limit reached (' + MAX_PHOTOS + ')', 'var(--red)'); return; }
+    var skipped = Math.max(0, queue.length - room);
+    if (skipped) queue = queue.slice(0, room);
+
+    // One at a time: keeps the picked order and avoids decoding a dozen
+    // full-size photos at once on a phone.
+    var failed = 0;
+    (function next() {
+      if (!queue.length) {
+        if (failed) toast(failed + (failed > 1 ? ' photos' : ' photo') + " couldn't be read", 'var(--red)');
+        else if (skipped) toast('Added ' + room + ' — limit is ' + MAX_PHOTOS + ' per delivery', 'var(--red)');
+        return;
+      }
+      compressImage(queue.shift(), function(dataUrl) {
         photosData.push(dataUrl);
         renderPhotoGrid();
-      }, function() {
-        toast('Could not read that photo', 'var(--red)');
-      });
-    });
-    e.target.value = ''; // allow taking/adding the same shot again
+        next();
+      }, function() { failed++; next(); });
+    })();
   }
 
   function compressImage(file, cb, onerr) {
@@ -1888,7 +1923,7 @@
     var bits = [];
     if (s.gc) bits.push('Contractor: ' + s.gc);
     if (s.project) bits.push(projectLabel(s));
-    document.getElementById('headerSub').textContent = bits.length ? bits.join(' · ') + ' · v8.5' : 'v8.5';
+    document.getElementById('headerSub').textContent = bits.length ? bits.join(' · ') + ' · v8.6' : 'v8.6';
   }
 
   function onHsgRepPick() {
