@@ -428,7 +428,7 @@
 
 <header>
   <h1>HSG Onsite Delivery Log</h1>
-  <p id="headerSub">v8.6</p>
+  <p id="headerSub">v9.0</p>
 </header>
 
 <div class="container">
@@ -459,6 +459,10 @@
           <button type="button" class="btn btn-secondary" onclick="loadEquipment()">Pull Received / Staged Equipment</button>
           <div id="eqList" style="margin-top:10px"></div>
           <button type="button" class="btn btn-primary hidden" id="eqAddBtn" style="margin-top:10px" onclick="addSelectedEquipment()">Add Selected to Delivery</button>
+          <label style="display:flex;gap:10px;align-items:flex-start;margin-top:14px;cursor:pointer;font-weight:400">
+            <input type="checkbox" id="fAddToBoard" checked style="margin-top:2px">
+            <span class="hint" style="margin:0"><b style="color:var(--navy)">Log hand-entered items as Direct Delivery.</b> Anything not pulled from the board's Warehouse Assets is added to its <b>Direct Delivery</b> group, marked Deployed, with this delivery's details. Untick for items that don't belong on the board (e.g. rentals).</span>
+          </label>
         </div>
 
         <label class="req" style="margin-bottom:8px">Items in this delivery</label>
@@ -600,6 +604,16 @@
           <div class="ac-list" id="acBoard"></div>
         </div>
       </div>
+      <div id="rBoardCreateWrap" class="hidden" style="border:1px dashed var(--border);border-radius:8px;padding:12px;margin-top:10px">
+        <p class="hint" style="margin:0 0 4px"><b>New receiving board</b> — copied from the TEMPLATE board (columns and groups only, no items).</p>
+        <label>Board Name</label>
+        <input type="text" id="rNewBoardName" autocomplete="off">
+        <p class="hint" style="margin-top:4px">Keep the project number in parentheses so the app can match it — e.g. AH Wichita West FSED (2025083) Blake.</p>
+        <label>Folder</label>
+        <select id="rNewBoardFolder"><option value="">No folder (workspace main level)</option></select>
+        <button type="button" class="btn btn-primary" id="rCreateBoardBtn" onclick="createBoardFromTemplate()">Create Board</button>
+        <button type="button" class="btn btn-secondary" onclick="hideCreateBoard()">Cancel</button>
+      </div>
       <div id="rBoardBox" class="hidden" style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-top:10px">
         <p class="hint" id="rBoardHow" style="margin:0 0 2px">Matched receiving board</p>
         <div id="rBoardChosen" style="font-weight:700;font-size:14px;word-break:break-word"></div>
@@ -673,11 +687,99 @@
   var editId = null;
   var currentTrans = null;
 
-  function load() {
-    try { return JSON.parse(localStorage.getItem(KEY)) || []; }
-    catch (e) { return []; }
+  /* Photos live in IndexedDB (hundreds of MB available) rather than
+     localStorage (~5 MB on iPhone), keyed by delivery id. photoCache keeps a
+     copy in memory so load() can stay synchronous. */
+  var PHOTO_DB_NAME = 'hsg_delivery_photos';
+  var photoCache = {};
+  var photoDb = null;
+
+  function photoDbOpen() {
+    if (photoDb) return Promise.resolve(photoDb);
+    return new Promise(function(res, rej) {
+      if (!window.indexedDB) { rej(new Error('No IndexedDB')); return; }
+      var r = indexedDB.open(PHOTO_DB_NAME, 1);
+      r.onupgradeneeded = function() { r.result.createObjectStore('photos'); };
+      r.onsuccess = function() { photoDb = r.result; res(photoDb); };
+      r.onerror = function() { rej(r.error); };
+    });
   }
-  function persist(list) { localStorage.setItem(KEY, JSON.stringify(list)); }
+  function photoDbWrite(fn) {
+    return photoDbOpen().then(function(db) {
+      return new Promise(function(res, rej) {
+        var t = db.transaction('photos', 'readwrite');
+        fn(t.objectStore('photos'));
+        t.oncomplete = function() { res(); };
+        t.onerror = t.onabort = function() { rej(t.error || new Error('Photo storage failed')); };
+      });
+    });
+  }
+  function photoStoreInit() {
+    return photoDbOpen().then(function(db) {
+      return new Promise(function(res) {
+        var t = db.transaction('photos', 'readonly');
+        var cur = t.objectStore('photos').openCursor();
+        cur.onsuccess = function() {
+          var c = cur.result;
+          if (c) { photoCache[String(c.key)] = c.value; c.continue(); } else res();
+        };
+        cur.onerror = function() { res(); };
+      });
+    }).catch(function() {});
+  }
+
+  function load() {
+    var list;
+    try { list = JSON.parse(localStorage.getItem(KEY)) || []; }
+    catch (e) { return []; }
+    list.forEach(function(x) {
+      var ph = photoCache[String(x.id)];
+      if (ph && ph.length) x.photos = ph.slice();
+      else if (!x.photos) x.photos = [];
+    });
+    return list;
+  }
+
+  // Returns false (and tells the user) if the delivery could not be stored.
+  function persist(list) {
+    var keep = {};
+    var slim = list.map(function(x) {
+      var id = String(x.id);
+      keep[id] = true;
+      var ph = x.photos || [];
+      var same = photoCache[id] && photoCache[id].length === ph.length &&
+                 photoCache[id].every(function(p, i) { return p === ph[i]; });
+      if (!same) {
+        if (ph.length) {
+          photoCache[id] = ph.slice();
+          photoDbWrite(function(st) { st.put(ph.slice(), id); }).catch(function() {
+            toast('Photos could not be stored on this phone — free up space, then edit and re-save the delivery', 'var(--red)', 9000);
+          });
+        } else if (photoCache[id]) {
+          delete photoCache[id];
+          photoDbWrite(function(st) { st.delete(id); }).catch(function() {});
+        }
+      }
+      var y = {};
+      Object.keys(x).forEach(function(k) { if (k !== 'photos') y[k] = x[k]; });
+      y.photoCount = ph.length;
+      return y;
+    });
+    // drop photos of deleted deliveries
+    Object.keys(photoCache).forEach(function(id) {
+      if (!keep[id]) {
+        delete photoCache[id];
+        photoDbWrite(function(st) { st.delete(id); }).catch(function() {});
+      }
+    });
+    try {
+      localStorage.setItem(KEY, JSON.stringify(slim));
+      return true;
+    } catch (e) {
+      alert('This phone is out of storage for the Delivery Log, so the delivery was NOT saved.\n\nExport a CSV from the Delivery Log tab and delete old entries, then save again. Nothing on the form has been cleared.');
+      return false;
+    }
+  }
   function loadSetup() {
     try { return JSON.parse(localStorage.getItem(SETKEY)) || {}; }
     catch (e) { return {}; }
@@ -773,11 +875,13 @@
 
   function handlePhotoInput(e) {
     var input = e.target;
-    var files = input.files;
+    // Copy the picked files BEFORE clearing the input: clearing it empties
+    // the live FileList on iOS Safari and Chrome, which silently dropped photos.
+    var files = Array.prototype.slice.call(input.files || []);
     input.value = ''; // allow re-picking the same shot
-    if (!files || !files.length) return;
+    if (!files.length) return;
 
-    var queue = Array.prototype.filter.call(files, isImageFile);
+    var queue = files.filter(isImageFile);
     if (!queue.length) { toast('No usable images in that selection', 'var(--red)'); return; }
 
     var room = MAX_PHOTOS - photosData.length;
@@ -973,7 +1077,8 @@
       recv: document.getElementById('fRecv').value.trim(),
       notes: document.getElementById('fNotes').value.trim(),
       sig: getSig(),
-      photos: photosData.slice()
+      photos: photosData.slice(),
+      addToBoard: !!(document.getElementById('fAddToBoard') || {}).checked
     };
     var list = load();
     var idx = -1;
@@ -982,14 +1087,13 @@
       var prev = idx > -1 ? list[idx] : null;
       entry.serial = (prev && prev.serial) || nextSerial();
       if (idx > -1) list[idx] = entry; else { list.push(entry); idx = list.length - 1; }
-      toast('Delivery updated');
     } else {
       entry.serial = nextSerial();
       list.push(entry);
       idx = list.length - 1;
-      toast('Delivery #' + list.length + ' saved');
     }
-    persist(list);
+    if (!persist(list)) return false;
+    toast(editId ? 'Delivery updated' : 'Delivery #' + list.length + ' saved');
     pushDeliveryToMonday(entry);
     var num = idx + 1;
     resetForm();
@@ -1068,6 +1172,7 @@
     document.getElementById('fDate').value = x.date;
     document.getElementById('fTime').value = x.time;
     resetItems(getItems(x));
+    var atb = document.getElementById('fAddToBoard'); if (atb) atb.checked = x.addToBoard !== false;
     document.getElementById('fFrom').value = x.from;
     document.getElementById('fFac').value = x.fac;
     if (x.dest === 'Site' || x.dest === 'Warehouse') {
@@ -1329,12 +1434,17 @@
     return { num: '', name: raw, owner: '' };
   }
 
+  function isTemplateName(nm) {
+    var n = (nm || '').trim();
+    return /\btemplate\b/i.test(n) && !/^(subitems|duplicate) of/i.test(n);
+  }
+
   function isProjectBoard(nm) {
     var n = (nm || '').trim();
     if (!n) return false;
     if (/^subitems of/i.test(n)) return false;
-    if (/^template$/i.test(n)) return false;
-    if (/^duplicate of template$/i.test(n)) return false;
+    if (isTemplateName(n)) return false;          // TEMPLATE, WARD TEMPLATE, …
+    if (/^duplicate of\b.*template/i.test(n)) return false;
     if (/build vibe/i.test(n)) return false;
     return true;
   }
@@ -1362,6 +1472,7 @@
     document.getElementById('acEqProj').classList.remove('show');
     document.getElementById('acBoard').classList.remove('show');
     document.getElementById('rBoardPickWrap').classList.add('hidden');
+    hideCreateBoard();
 
     // Only drop the chosen board when the region genuinely changed. Re-touching
     // the dropdown on the same region should not undo a match.
@@ -1523,24 +1634,38 @@
     return a !== '' && a === b;
   }
 
+  var CREATE_BTN = '<button type="button" class="btn btn-secondary" onclick="showCreateBoard()">Create Board from Template</button>';
+
+  function findBoardByNum(list, num) {
+    var hit = null;
+    list.forEach(function(b) { if (!hit && sameProjectNum(b.num, num)) hit = b; });
+    return hit;
+  }
+
   function matchBoardForProject(ws, num) {
     var st = document.getElementById('rBoardStatus');
     st.textContent = 'Looking for the receiving board…';
+    hideCreateBoard();
+    // The board list is saved on this device. If the saved copy has no match,
+    // re-read monday.com once — the board may have been created since.
     ensureBoards(ws).then(function(list) {
+      if (findBoardByNum(list, num)) return list;
+      return ensureBoards(ws, true);
+    }).then(function(list) {
       if (!list.length) {
         st.innerHTML = '<span style="color:var(--red)">No project boards in ' + esc(REGION_NAMES[ws])
-          + ' yet — enter items by hand for now.</span>';
+          + ' yet.</span>' + (num ? ' Create one for this project below.' : '');
+        if (num) showCreateBoard();
         return;
       }
-      var hit = null;
-      list.forEach(function(b) { if (!hit && sameProjectNum(b.num, num)) hit = b; });
+      var hit = findBoardByNum(list, num);
       if (hit) {
         setBoard(hit, 'Matched on project number ' + num);
         st.textContent = '';
         toast('Receiving board matched — ' + hit.raw);
       } else {
         st.innerHTML = '<span style="color:var(--red)">No board in ' + esc(REGION_NAMES[ws])
-          + ' matches project ' + esc(num || '(none)') + ' — pick one below.</span>';
+          + ' matches project ' + esc(num || '(none)') + ' — pick one below, or create it.</span>' + (num ? CREATE_BTN : '');
         document.getElementById('rBoardPickWrap').classList.remove('hidden');
         document.getElementById('rBoardSearch').value = '';
         toast('No matching board — pick one', 'var(--red)', 6000);
@@ -1553,6 +1678,99 @@
       st.innerHTML = '<span style="color:var(--red)">Could not load boards: ' + esc(m) + '</span>';
       toast('Could not load boards: ' + m, 'var(--red)', 8000);
     });
+  }
+
+  /* ---- create a receiving board from the TEMPLATE board ---- */
+  // Used when the region's workspace has no board named TEMPLATE of its own.
+  var DEFAULT_TEMPLATE_BOARD_ID = '18429600896';   // "TEMPLATE" in Armstrong Receiving
+
+  function hideCreateBoard() {
+    var w = document.getElementById('rBoardCreateWrap');
+    if (w) w.classList.add('hidden');
+  }
+
+  function showCreateBoard() {
+    var ws = document.getElementById('sRegion').value;
+    var c = loadSetup();
+    if (!ws || !c.projectNum) { toast('Pick a region and a project first', 'var(--red)'); return; }
+    document.getElementById('rNewBoardName').value = (c.project ? c.project + ' ' : '') + '(' + c.projectNum + ')';
+    var sel = document.getElementById('rNewBoardFolder');
+    sel.innerHTML = '<option value="">No folder (workspace main level)</option>';
+    document.getElementById('rBoardPickWrap').classList.add('hidden');
+    document.getElementById('rBoardCreateWrap').classList.remove('hidden');
+    document.getElementById('rNewBoardName').focus();
+    mondayGQL('query($ws: [ID!]) { folders(workspace_ids: $ws) { id name } }', { ws: [ws] }).then(function(d) {
+      var folders = ((d && d.folders) || []).slice().sort(function(a, b) { return a.name.localeCompare(b.name); });
+      sel.innerHTML = '<option value="">No folder (workspace main level)</option>' + folders.map(function(f) {
+        return '<option value="' + esc(f.id) + '">' + esc(f.name) + '</option>';
+      }).join('');
+    }).catch(function() { /* folders are optional */ });
+  }
+
+  function findTemplateBoard(ws) {
+    var q = 'query($ws: [ID!]) { boards(workspace_ids: $ws, limit: 300, state: active) { id name } }';
+    return mondayGQL(q, { ws: [ws] }).then(function(d) {
+      var t = ((d && d.boards) || []).find(function(b) { return isTemplateName(b.name); });
+      return t ? t.id : DEFAULT_TEMPLATE_BOARD_ID;
+    });
+  }
+
+  function createBoardFromTemplate() {
+    var ws = document.getElementById('sRegion').value;
+    var c = loadSetup();
+    var name = document.getElementById('rNewBoardName').value.trim();
+    var folderId = document.getElementById('rNewBoardFolder').value;
+    var btn = document.getElementById('rCreateBoardBtn');
+    if (!ws || !c.projectNum) { toast('Pick a region and a project first', 'var(--red)'); return; }
+    if (!name) { toast('Enter a board name', 'var(--red)'); return; }
+    if (!sameProjectNum(parseBoardName(name).num, c.projectNum)) {
+      toast('Keep (' + c.projectNum + ') in the board name so the app can match it', 'var(--red)', 7000);
+      return;
+    }
+    if (!confirm('Create the board "' + name + '" in ' + REGION_NAMES[ws] + ' on Monday.com?')) return;
+    btn.disabled = true; btn.textContent = 'Checking…';
+    var done = function() { btn.disabled = false; btn.textContent = 'Create Board'; };
+
+    // Re-check first so two people don't create the same board.
+    ensureBoards(ws, true).then(function(list) {
+      var existing = findBoardByNum(list, c.projectNum);
+      if (existing) {
+        setBoard(existing, 'Already existed — matched on project number ' + c.projectNum);
+        hideCreateBoard();
+        document.getElementById('rBoardStatus').textContent = '';
+        toast('A board for ' + c.projectNum + ' already exists — using it');
+        return null;
+      }
+      btn.textContent = 'Creating board…';
+      return findTemplateBoard(ws).then(function(templateId) {
+        var mut = 'mutation($id: ID!, $name: String!, $ws: ID, $folder: ID) { duplicate_board(board_id: $id, '
+          + 'duplicate_type: duplicate_board_with_structure, board_name: $name, workspace_id: $ws, folder_id: $folder, '
+          + 'keep_subscribers: false) { board { id name } } }';
+        var vars = { id: templateId, name: name, ws: ws };
+        if (folderId) vars.folder = folderId;
+        return mondayGQL(mut, vars);
+      }).then(function(d) {
+        var nb = d && d.duplicate_board && d.duplicate_board.board;
+        if (!nb || !nb.id) throw new Error('Monday.com did not return the new board');
+        // The template's description is leftover text; replace it with the project name.
+        mondayGQL('mutation($b: ID!, $v: String!) { update_board(board_id: $b, board_attribute: description, new_value: $v) }',
+          { b: nb.id, v: (c.project || name) }).catch(function() {});
+        var pn = parseBoardName(nb.name || name);
+        var cc = loadBoardCache();
+        cc[ws] = (cc[ws] || []).concat([{ id: nb.id, raw: nb.name || name, num: pn.num, name: pn.name, owner: pn.owner }]);
+        localStorage.setItem(BOARDKEY, JSON.stringify(cc));
+        setBoard({ id: nb.id, raw: nb.name || name }, 'Created from template');
+        hideCreateBoard();
+        document.getElementById('rBoardStatus').textContent = '';
+        toast('Board created — ' + (nb.name || name));
+      });
+    }).catch(function(err) {
+      var m = (err && err.message) ? err.message : String(err);
+      if (/permission|not authorized|unauthorized|forbidden/i.test(m)) {
+        m += ' — the Monday.com account behind the token or proxy needs permission to create boards in this workspace';
+      }
+      toast('Could not create board: ' + m, 'var(--red)', 9000);
+    }).then(done, done);
   }
 
   function setBoard(b, how) {
@@ -1572,6 +1790,7 @@
   }
 
   function showBoardPicker() {
+    hideCreateBoard();
     var ws = document.getElementById('sRegion').value;
     if (!ws) { toast('Pick a region first', 'var(--red)'); return; }
     toast('Loading boards…');
@@ -1773,40 +1992,107 @@
   }
 
   /* ---- write-back on save ---- */
+  // Columns filled on items created from a hand-entered delivery line.
+  var DD_WANT = {
+    desc:   'Description',
+    vendor: 'Vendor',
+    po:     'PO Number',
+    qty:    "Qty Rec'd"
+  };
+
+  // After items are created on the board, remember their ids on the saved
+  // entry so editing and re-saving the delivery updates them instead of
+  // creating duplicates.
+  function rememberCreatedIds(entryId, created) {
+    if (!created.length) return;
+    var list = load();
+    var e = list.find(function(x) { return x.id === entryId; });
+    if (!e || !e.items) return;
+    created.forEach(function(c) { if (e.items[c.index]) e.items[c.index].mondayId = c.id; });
+    persist(list);
+  }
+
   function pushDeliveryToMonday(entry) {
     var s = loadSetup();
     if (!s.eqBoardId) return;
-    var linked = (entry.items || []).filter(function(x) { return x.mondayId; });
-    if (!linked.length) return;
+    var items = entry.items || [];
+    var linked = items.filter(function(x) { return x.mondayId; });
+    var fresh = entry.addToBoard === false ? [] : items
+      .map(function(x, i) { return { it: x, index: i }; })
+      .filter(function(o) { return !o.it.mondayId && (o.it.desc || o.it.vendor); });
+    if (!linked.length && !fresh.length) return;
     toast('Updating Monday.com…');
-    fetchBoardColumns(s.eqBoardId).then(function(map) {
+
+    var boardQ = 'query($b: [ID!]) { boards(ids: $b) { columns { id title } groups { id title } } }';
+    mondayGQL(boardQ, { b: [s.eqBoardId] }).then(function(d) {
+      var bd = d && d.boards && d.boards[0];
+      if (!bd) throw new Error('Board not found');
+      var map = {};
+      (bd.columns || []).forEach(function(c) { map[(c.title || '').trim().toLowerCase()] = c.id; });
       var r = resolveCols(map, WB_WANT);
       if (!r.ids.status) throw new Error('No "Status" column found');
-      var mut = 'mutation($b: ID!, $i: ID!, $v: JSON!) { change_multiple_column_values(board_id: $b, item_id: $i, column_values: $v) { id } }';
-      var payload = {};
-      payload[r.ids.status] = { label: 'Deployed' };
-      if (r.ids.dateOut && entry.date) payload[r.ids.dateOut] = { date: entry.date };
-      if (r.ids.recvBy) payload[r.ids.recvBy] = entry.recv || '';
-      if (r.ids.delBy)  payload[r.ids.delBy]  = s.hsgRep || '';
-      if (r.ids.delTo)  payload[r.ids.delTo]  = entry.dest || '';
-      if (r.ids.notes)  payload[r.ids.notes]  = entry.notes || '';
-      var jsonVals = JSON.stringify(payload);
-      var done = 0, failed = 0;
-      return linked.reduce(function(chain, it) {
-        return chain.then(function() {
-          return mondayGQL(mut, { b: s.eqBoardId, i: it.mondayId, v: jsonVals })
-            .then(function() { done++; })
-            .catch(function() { failed++; });
+      var dd = resolveCols(map, DD_WANT);
+      var ddGroup = (bd.groups || []).find(function(g) { return /direct\s*delivery/i.test(g.title || ''); });
+
+      // delivery details shared by every item in this delivery
+      var base = {};
+      base[r.ids.status] = { label: 'Deployed' };
+      if (r.ids.dateOut && entry.date) base[r.ids.dateOut] = { date: entry.date };
+      if (r.ids.recvBy) base[r.ids.recvBy] = entry.recv || '';
+      if (r.ids.delBy)  base[r.ids.delBy]  = s.hsgRep || '';
+      if (r.ids.delTo)  base[r.ids.delTo]  = entry.dest || '';
+      if (r.ids.notes)  base[r.ids.notes]  = { text: entry.notes || '' };
+
+      var upd = 'mutation($b: ID!, $i: ID!, $v: JSON!) { change_multiple_column_values(board_id: $b, item_id: $i, column_values: $v) { id } }';
+      var crt = 'mutation($b: ID!, $g: String, $n: String!, $v: JSON) { create_item(board_id: $b, group_id: $g, item_name: $n, column_values: $v) { id } }';
+      var updated = 0, added = 0, failed = 0, created = [];
+
+      var chain = linked.reduce(function(p, it) {
+        return p.then(function() {
+          return mondayGQL(upd, { b: s.eqBoardId, i: it.mondayId, v: JSON.stringify(base) })
+            .then(function() { updated++; }).catch(function() { failed++; });
         });
-      }, Promise.resolve()).then(function() {
-        if (failed) toast(done + ' updated, ' + failed + ' failed on Monday.com', 'var(--red)', 7000);
-        else if (r.missing.length) toast(done + ' item(s) marked Deployed — missing column(s): ' + r.missing.join(', '), 'var(--red)', 7000);
-        else toast(done + ' item(s) marked Deployed on Monday.com');
+      }, Promise.resolve());
+
+      chain = fresh.reduce(function(p, o) {
+        return p.then(function() {
+          var it = o.it, vals = {};
+          Object.keys(base).forEach(function(k) { vals[k] = base[k]; });
+          var desc = it.desc || '';
+          if (it.unit) desc += (desc ? ' — ' : '') + (it.qty || '') + ' ' + it.unit;
+          if (dd.ids.desc)   vals[dd.ids.desc]   = { text: desc };
+          if (dd.ids.vendor) vals[dd.ids.vendor] = { text: it.vendor || '' };
+          if (dd.ids.po)     vals[dd.ids.po]     = it.po || '';
+          var q = parseFloat(it.qty);
+          if (dd.ids.qty && !isNaN(q)) vals[dd.ids.qty] = String(q);
+          var name = (it.desc || it.vendor || 'Direct delivery item').slice(0, 250);
+          var v = { b: s.eqBoardId, n: name, v: JSON.stringify(vals) };
+          if (ddGroup) v.g = ddGroup.id;
+          return mondayGQL(crt, v).then(function(res) {
+            var id = res && res.create_item && res.create_item.id;
+            if (id) { created.push({ index: o.index, id: String(id) }); added++; } else failed++;
+          }).catch(function() { failed++; });
+        });
+      }, chain);
+
+      return chain.then(function() {
+        rememberCreatedIds(entry.id, created);
+        var parts = [];
+        if (updated) parts.push(updated + ' marked Deployed');
+        if (added) parts.push(added + ' added to ' + (ddGroup ? 'Direct Delivery' : 'the board'));
+        var msg = (parts.join(', ') || 'Nothing changed') + ' on Monday.com';
+        var missing = r.missing.concat(fresh.length ? dd.missing : []);
+        if (failed) toast(msg + ' — ' + failed + ' failed', 'var(--red)', 8000);
+        else if (fresh.length && !ddGroup) toast(msg + ' — no "Direct Delivery" group on this board, so new items went to the top group', 'var(--red)', 8000);
+        else if (missing.length) toast(msg + ' — missing column(s): ' + missing.join(', '), 'var(--red)', 8000);
+        else toast(msg);
       });
     }).catch(function(err) {
       toast('Monday.com update failed: ' + (err && err.message ? err.message : String(err)) + ' — the delivery is still saved locally', 'var(--red)', 8000);
     });
   }
+
+
 
   function loadProjects() {
     try { return JSON.parse(localStorage.getItem(PROJKEY)) || []; }
@@ -1923,7 +2209,7 @@
     var bits = [];
     if (s.gc) bits.push('Contractor: ' + s.gc);
     if (s.project) bits.push(projectLabel(s));
-    document.getElementById('headerSub').textContent = bits.length ? bits.join(' · ') + ' · v8.6' : 'v8.6';
+    document.getElementById('headerSub').textContent = bits.length ? bits.join(' · ') + ' · v9.0' : 'v9.0';
   }
 
   function onHsgRepPick() {
@@ -2195,6 +2481,13 @@
   updateCount();
   updateHeaderSub();
   showTab('setup');
+  // Photos load from IndexedDB in the background; move any older deliveries'
+  // photos out of localStorage once they're loaded.
+  photoStoreInit().then(function() {
+    var list = load();
+    if (list.some(function(x) { return x.photos && x.photos.length && !photoCache[String(x.id)]; })) persist(list);
+    if (!document.getElementById('viewLog').classList.contains('hidden')) render();
+  });
 </script>
 <script>
 /** @license
