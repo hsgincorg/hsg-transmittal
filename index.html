@@ -475,11 +475,14 @@
         <div class="row">
           <div>
             <label class="req">Facilitated By</label>
-            <select id="fFac" required>
+            <select id="fFac" required onchange="toggleFacOther()">
               <option value="">Select…</option>
               <option>HSG Personnel</option>
               <option>Warehouse</option>
+              <option>Vendor</option>
+              <option>Other</option>
             </select>
+            <input type="text" id="fFacOther" class="hidden" style="margin-top:8px" autocomplete="off">
           </div>
           <div>
             <label class="req">Going To</label>
@@ -1022,6 +1025,43 @@
   }
 
   /* ---------- app ---------- */
+  // Facilitated By: Vendor takes an optional vendor name (pre-filled from the
+  // first item), Other needs a name such as FedEx.
+  function toggleFacOther() {
+    var sel = document.getElementById('fFac');
+    var other = document.getElementById('fFacOther');
+    if (sel.value === 'Vendor' || sel.value === 'Other') {
+      other.classList.remove('hidden');
+      other.placeholder = sel.value === 'Vendor' ? 'Vendor name (optional)' : 'Who? e.g. FedEx, UPS, freight carrier';
+      if (sel.value === 'Vendor' && !other.value) {
+        var v = document.querySelector('#items .item-card .iVendor');
+        if (v && v.value.trim()) other.value = v.value.trim();
+      }
+      if (sel.value === 'Other') other.focus();
+    } else {
+      other.classList.add('hidden');
+      other.value = '';
+    }
+  }
+
+  function readFac() {
+    var sel = document.getElementById('fFac').value;
+    var txt = document.getElementById('fFacOther').value.trim();
+    if (sel === 'Vendor') return txt ? 'Vendor — ' + txt : 'Vendor';
+    if (sel === 'Other') return txt;
+    return sel;
+  }
+
+  function setFac(val) {
+    var sel = document.getElementById('fFac'), other = document.getElementById('fFacOther');
+    val = val || '';
+    other.value = '';
+    if (!val || val === 'HSG Personnel' || val === 'Warehouse' || val === 'Vendor') sel.value = val;
+    else if (/^Vendor — /.test(val)) { sel.value = 'Vendor'; other.value = val.replace(/^Vendor — /, ''); }
+    else { sel.value = 'Other'; other.value = val; }
+    toggleFacOther();
+  }
+
   function toggleDestOther() {
     var sel = document.getElementById('fDest');
     var other = document.getElementById('fDestOther');
@@ -1066,13 +1106,18 @@
       destVal = document.getElementById('fDestOther').value.trim();
       if (!destVal) { toast('Enter a destination', 'var(--red)'); return false; }
     }
+    if (document.getElementById('fFac').value === 'Other' && !document.getElementById('fFacOther').value.trim()) {
+      toast('Enter who facilitated the delivery (e.g. FedEx)', 'var(--red)');
+      document.getElementById('fFacOther').focus();
+      return false;
+    }
     var entry = {
       id: editId || Date.now(),
       date: document.getElementById('fDate').value,
       time: document.getElementById('fTime').value,
       items: collectItems(),
       from: document.getElementById('fFrom').value.trim(),
-      fac: document.getElementById('fFac').value,
+      fac: readFac(),
       dest: destVal,
       recv: document.getElementById('fRecv').value.trim(),
       notes: document.getElementById('fNotes').value.trim(),
@@ -1112,6 +1157,7 @@
     photosData = [];
     renderPhotoGrid();
     toggleDestOther();
+    toggleFacOther();
     document.getElementById('saveBtn').textContent = 'Save Delivery';
     document.getElementById('cancelEdit').classList.add('hidden');
     nowDefaults();
@@ -1174,7 +1220,7 @@
     resetItems(getItems(x));
     var atb = document.getElementById('fAddToBoard'); if (atb) atb.checked = x.addToBoard !== false;
     document.getElementById('fFrom').value = x.from;
-    document.getElementById('fFac').value = x.fac;
+    setFac(x.fac);
     if (x.dest === 'Site' || x.dest === 'Warehouse') {
       document.getElementById('fDest').value = x.dest;
       document.getElementById('fDestOther').classList.add('hidden');
@@ -1646,12 +1692,15 @@
     var st = document.getElementById('rBoardStatus');
     st.textContent = 'Looking for the receiving board…';
     hideCreateBoard();
-    // The board list is saved on this device. If the saved copy has no match,
-    // re-read monday.com once — the board may have been created since.
-    ensureBoards(ws).then(function(list) {
-      if (findBoardByNum(list, num)) return list;
-      return ensureBoards(ws, true);
+    // Always read the live board list: the copy saved on this device can
+    // still hold boards that were deleted or renamed in Monday.com. Fall back
+    // to the saved copy only when Monday.com can't be reached.
+    var offline = false;
+    ensureBoards(ws, true).catch(function() {
+      offline = true;
+      return ensureBoards(ws);
     }).then(function(list) {
+      if (offline) toast('Offline — using the board list saved on this phone', 'var(--red)', 5000);
       if (!list.length) {
         st.innerHTML = '<span style="color:var(--red)">No project boards in ' + esc(REGION_NAMES[ws])
           + ' yet.</span>' + (num ? ' Create one for this project below.' : '');
@@ -1771,6 +1820,34 @@
       }
       toast('Could not create board: ' + m, 'var(--red)', 9000);
     }).then(done, done);
+  }
+
+  function clearSavedBoard(why) {
+    var c = loadSetup();
+    var old = c.eqBoardName;
+    c.eqBoardId = ''; c.eqBoardName = '';
+    localStorage.setItem(SETKEY, JSON.stringify(c));
+    var cc = loadBoardCache();
+    if (c.region && cc[c.region]) { delete cc[c.region]; localStorage.setItem(BOARDKEY, JSON.stringify(cc)); }
+    showChosenBoard('');
+    updateEqBlock();
+    updateHeaderSub();
+    toast('"' + (old || 'The saved board') + '" ' + (why || 'no longer exists in Monday.com')
+      + ' — open Project Info and pick the project again', 'var(--red)', 9000);
+  }
+
+  // Confirms the board saved on this phone is still active in Monday.com.
+  function verifySavedBoard() {
+    var c = loadSetup();
+    if (!c.eqBoardId) return Promise.resolve(true);
+    return mondayGQL('query($b: [ID!]) { boards(ids: $b, state: all) { id state } }', { b: [c.eqBoardId] })
+      .then(function(d) {
+        var b = d && d.boards && d.boards[0];
+        if (b && b.state === 'active') return true;
+        clearSavedBoard(b ? 'was ' + b.state + ' in Monday.com' : 'no longer exists in Monday.com');
+        return false;
+      })
+      .catch(function() { return true; });   // offline: keep it, try again later
   }
 
   function setBoard(b, how) {
@@ -1899,7 +1976,10 @@
     var s = loadSetup();
     if (!s.eqBoardId) { toast('Pick a project board in Project Info first', 'var(--red)'); return; }
     toast('Reading board…');
-    fetchBoardColumns(s.eqBoardId).then(function(map) {
+    verifySavedBoard().then(function(ok) {
+      if (!ok) throw { silent: true };
+      return fetchBoardColumns(s.eqBoardId);
+    }).then(function(map) {
       var r = resolveCols(map, EQ_WANT);
       if (!r.ids.status) throw new Error('No "Status" column on this board');
       var ids = Object.keys(r.ids).map(function(k) { return r.ids[k]; });
@@ -1937,6 +2017,7 @@
         }
       });
     }).catch(function(err) {
+      if (err && err.silent) return;    // verifySavedBoard already explained
       toast('Could not load equipment: ' + (err && err.message ? err.message : String(err)), 'var(--red)', 7000);
     });
   }
@@ -2022,6 +2103,10 @@
       .filter(function(o) { return !o.it.mondayId && (o.it.desc || o.it.vendor); });
     if (!linked.length && !fresh.length) return;
     toast('Updating Monday.com…');
+    verifySavedBoard().then(function(ok) { if (ok) writeDeliveryToBoard(entry, s, linked, fresh); });
+  }
+
+  function writeDeliveryToBoard(entry, s, linked, fresh) {
 
     var boardQ = 'query($b: [ID!]) { boards(ids: $b) { columns { id title } groups { id title } } }';
     mondayGQL(boardQ, { b: [s.eqBoardId] }).then(function(d) {
@@ -2483,6 +2568,8 @@
   showTab('setup');
   // Photos load from IndexedDB in the background; move any older deliveries'
   // photos out of localStorage once they're loaded.
+  // Catch a saved board that was deleted or archived in Monday.com.
+  setTimeout(function() { verifySavedBoard(); }, 1500);
   photoStoreInit().then(function() {
     var list = load();
     if (list.some(function(x) { return x.photos && x.photos.length && !photoCache[String(x.id)]; })) persist(list);
