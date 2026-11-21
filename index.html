@@ -423,12 +423,27 @@
     body { background: #fff; padding: 0; }
   }
 </style>
+<script>
+  // v9.1: the second item field is a box/package count (stored as "unit" for older deliveries).
+  function boxesCell(u) { u = String(u == null ? '' : u).trim(); return u || '\u2014'; }
+  function qtyBoxesText(it) {
+    var q = String(it.qty == null ? '' : it.qty).trim();
+    var u = String(it.unit == null ? '' : it.unit).trim();
+    var parts = [];
+    if (q) parts.push('Qty ' + q);
+    if (u) {
+      if (/^\d+(\.\d+)?$/.test(u)) parts.push(u + (parseFloat(u) === 1 ? ' box' : ' boxes'));
+      else parts.push(u);
+    }
+    return parts.join(', ');
+  }
+</script>
 </head>
 <body>
 
 <header>
   <h1>HSG Onsite Delivery Log</h1>
-  <p id="headerSub">v9.0</p>
+  <p id="headerSub">v9.2</p>
 </header>
 
 <div class="container">
@@ -965,7 +980,7 @@
       + '<input type="text" class="iDesc" placeholder="e.g., Genie S-60 boom lift, S/N 12345" required>'
       + '<div class="row"><div><label>Quantity</label>'
       + '<input type="number" class="iQty" inputmode="decimal" step="any" placeholder="1"></div>'
-      + '<div><label>Unit</label><input type="text" class="iUnit" placeholder="unit / boxes"></div></div>'
+      + '<div><label>Boxes / Pkgs</label><input type="text" class="iUnit" inputmode="numeric" placeholder="e.g., 3"></div></div>'
       + '<label>PO / Ticket #</label>'
       + '<input type="text" class="iPo" placeholder="PO-4512 / T-0088">'
       + '<input type="hidden" class="iMondayId">';
@@ -1131,6 +1146,7 @@
       idx = list.findIndex(function(x) { return x.id === editId; });
       var prev = idx > -1 ? list[idx] : null;
       entry.serial = (prev && prev.serial) || nextSerial();
+      if (prev && prev.tSent) entry.tSent = prev.tSent;
       if (idx > -1) list[idx] = entry; else { list.push(entry); idx = list.length - 1; }
     } else {
       entry.serial = nextSerial();
@@ -1190,7 +1206,7 @@
       html += '<div class="entry">'
         + '<div class="entry-top"><span class="entry-num">#' + (i + 1) + '</span>'
         + '<span class="entry-date">' + esc(x.date) + ' ' + esc(x.time) + '</span></div>'
-        + '<div class="entry-title">' + esc(first.desc) + (first.qty ? ' — ' + esc(first.qty) + ' ' + esc(first.unit) : '')
+        + '<div class="entry-title">' + esc(first.desc) + (qtyBoxesText(first) ? ' — ' + esc(qtyBoxesText(first)) : '')
         + (its.length > 1 ? ' <span style="color:var(--muted);font-weight:400">+' + (its.length - 1) + ' more item' + (its.length > 2 ? 's' : '') + '</span>' : '') + '</div>'
         + '<div class="entry-sub">' + esc(vendors.join(', ')) + (first.po ? ' · ' + esc(first.po) : '') + '</div>'
         + '<div class="entry-tags">'
@@ -2106,9 +2122,109 @@
     verifySavedBoard().then(function(ok) { if (ok) writeDeliveryToBoard(entry, s, linked, fresh); });
   }
 
+  /* ---------- v9.2: small transmittal copy on the board's Transmittal (Files) column ---------- */
+  // Photos are shrunk to thumbnails so the copy stays small (typically under ~300 KB).
+  function makeThumb(dataUrl, maxPx) {
+    return new Promise(function(resolve) {
+      var img = new Image();
+      img.onload = function() {
+        try {
+          var sc = Math.min(1, maxPx / Math.max(img.width, img.height));
+          var c = document.createElement('canvas');
+          c.width = Math.max(1, Math.round(img.width * sc));
+          c.height = Math.max(1, Math.round(img.height * sc));
+          var g = c.getContext('2d');
+          g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+          g.drawImage(img, 0, 0, c.width, c.height);
+          resolve(c.toDataURL('image/jpeg', 0.6));
+        } catch (e) { resolve(null); }
+      };
+      img.onerror = function() { resolve(null); };
+      img.src = dataUrl;
+    });
+  }
+
+  function buildSlimTransmittal(entry, s) {
+    return Promise.all((entry.photos || []).map(function(p) { return makeThumb(p, 360); })).then(function(thumbs) {
+      var x2 = {};
+      Object.keys(entry).forEach(function(k) { x2[k] = entry[k]; });
+      x2.photos = thumbs.filter(Boolean);
+      var J = function(o) { return new window.jspdf.jsPDF(Object.assign({}, o, { compress: true })); };
+      var tn = transNo(entry, entry.serial || 1);
+      var r = buildTransmittalPdf(J, x2, entry.serial || 1, s, tn);
+      return { blob: r.doc.output('blob'), name: tn + '.pdf' };
+    });
+  }
+
+  // Fingerprint of what the transmittal shows, so a retry doesn't attach the same copy twice
+  // but a real edit attaches the revised one.
+  function transHash(entry, s) {
+    var src = JSON.stringify([entry.date, entry.time, entry.from, entry.fac, entry.dest, entry.recv, entry.notes,
+      (entry.items || []).map(function(it) { return [it.vendor, it.desc, it.qty, it.unit, it.po]; }),
+      s.hsgRep || '', s.gc || '', s.owner || '',
+      (entry.photos || []).map(function(p) { return p.length + p.slice(-48); }),
+      entry.sig ? entry.sig.length + entry.sig.slice(-64) : '']);
+    var h = 5381;
+    for (var i = 0; i < src.length; i++) h = ((h << 5) + h + src.charCodeAt(i)) | 0;
+    return String(h >>> 0);
+  }
+
+  function uploadTransmittalFile(itemId, colId, blob, fname) {
+    if (!/^\d+$/.test(String(itemId)) || !/^[a-z0-9_]+$/i.test(String(colId))) return Promise.reject(new Error('bad item or column'));
+    var st = loadSetup();
+    var proxy = liveField('sMProxyUrl', st.mProxyUrl);
+    var token = liveField('sMToken', st.mToken);
+    var fd = new FormData(), url, headers = {};
+    if (proxy) {
+      url = proxy.replace(/\/+$/, '') + '/file';
+      fd.append('item', String(itemId));
+      fd.append('column', String(colId));
+      fd.append('file', blob, fname);
+    } else if (token) {
+      url = 'https://api.monday.com/v2/file';
+      headers.Authorization = token;
+      fd.append('query', 'mutation ($file: File!) { add_file_to_column (item_id: ' + itemId + ', column_id: "' + colId + '", file: $file) { id } }');
+      fd.append('variables[file]', blob, fname);
+    } else {
+      return Promise.reject(new Error('no Sync Proxy URL set'));
+    }
+    return fetch(url, { method: 'POST', headers: headers, body: fd })
+      .then(function(r) { return r.json(); })
+      .then(function(j) {
+        if (j.errors && j.errors.length) throw new Error(j.errors[0].message || 'upload refused');
+        if (j.error_message) throw new Error(j.error_message);
+        return j;
+      });
+  }
+
+  function attachTransmittal(entry, s, colId, itemIds) {
+    var hash = transHash(entry, s);
+    var prev = entry.tSent && entry.tSent.hash === hash ? entry.tSent.ids || [] : [];
+    var todo = itemIds.filter(function(id) { return prev.indexOf(id) === -1; });
+    if (!todo.length) return Promise.resolve({ sent: 0, failed: 0 });
+    if (!window.jspdf || !window.jspdf.jsPDF) return Promise.resolve({ sent: 0, failed: todo.length, error: 'PDF engine not loaded' });
+    var done = prev.slice(), sent = 0, bad = 0, lastErr = '';
+    return buildSlimTransmittal(entry, s).then(function(f) {
+      return todo.reduce(function(p, id) {
+        return p.then(function() {
+          return uploadTransmittalFile(id, colId, f.blob, f.name)
+            .then(function() { sent++; done.push(id); })
+            .catch(function(e) { bad++; lastErr = e && e.message ? e.message : String(e); });
+        });
+      }, Promise.resolve());
+    }).catch(function(e) { bad = todo.length; lastErr = e && e.message ? e.message : String(e); })
+    .then(function() {
+      var list = load();
+      var e = list.find(function(x) { return x.id === entry.id; });
+      if (e) { e.tSent = { hash: hash, ids: done }; persist(list); }
+      entry.tSent = { hash: hash, ids: done };
+      return { sent: sent, failed: bad, error: lastErr };
+    });
+  }
+
   function writeDeliveryToBoard(entry, s, linked, fresh) {
 
-    var boardQ = 'query($b: [ID!]) { boards(ids: $b) { columns { id title } groups { id title } } }';
+    var boardQ = 'query($b: [ID!]) { boards(ids: $b) { columns { id title type } groups { id title } } }';
     mondayGQL(boardQ, { b: [s.eqBoardId] }).then(function(d) {
       var bd = d && d.boards && d.boards[0];
       if (!bd) throw new Error('Board not found');
@@ -2118,6 +2234,7 @@
       if (!r.ids.status) throw new Error('No "Status" column found');
       var dd = resolveCols(map, DD_WANT);
       var ddGroup = (bd.groups || []).find(function(g) { return /direct\s*delivery/i.test(g.title || ''); });
+      var tCol = (bd.columns || []).find(function(c) { return c.type === 'file' && /transmittal/i.test(c.title || ''); });
 
       // delivery details shared by every item in this delivery
       var base = {};
@@ -2144,7 +2261,7 @@
           var it = o.it, vals = {};
           Object.keys(base).forEach(function(k) { vals[k] = base[k]; });
           var desc = it.desc || '';
-          if (it.unit) desc += (desc ? ' — ' : '') + (it.qty || '') + ' ' + it.unit;
+          if (it.unit) desc += (desc ? ' — ' : '') + qtyBoxesText(it);
           if (dd.ids.desc)   vals[dd.ids.desc]   = { text: desc };
           if (dd.ids.vendor) vals[dd.ids.vendor] = { text: it.vendor || '' };
           if (dd.ids.po)     vals[dd.ids.po]     = it.po || '';
@@ -2162,12 +2279,20 @@
 
       return chain.then(function() {
         rememberCreatedIds(entry.id, created);
+        var itemIds = linked.map(function(it) { return String(it.mondayId); })
+          .concat(created.map(function(c) { return c.id; }));
+        if (!tCol || !itemIds.length) return { sent: 0, failed: 0, skipped: true };
+        return attachTransmittal(entry, s, tCol.id, itemIds);
+      }).then(function(tr) {
         var parts = [];
         if (updated) parts.push(updated + ' marked Deployed');
         if (added) parts.push(added + ' added to ' + (ddGroup ? 'Direct Delivery' : 'the board'));
+        if (tr.sent) parts.push('transmittal copy attached');
         var msg = (parts.join(', ') || 'Nothing changed') + ' on Monday.com';
         var missing = r.missing.concat(fresh.length ? dd.missing : []);
-        if (failed) toast(msg + ' — ' + failed + ' failed', 'var(--red)', 8000);
+        if (!tCol) missing.push('Transmittal (Files column)');
+        if (tr.failed) toast(msg + ' — transmittal copy did not upload' + (tr.error ? ' (' + tr.error + ')' : '') + '. Edit and save the delivery to retry.', 'var(--red)', 9000);
+        else if (failed) toast(msg + ' — ' + failed + ' failed', 'var(--red)', 8000);
         else if (fresh.length && !ddGroup) toast(msg + ' — no "Direct Delivery" group on this board, so new items went to the top group', 'var(--red)', 8000);
         else if (missing.length) toast(msg + ' — missing column(s): ' + missing.join(', '), 'var(--red)', 8000);
         else toast(msg);
@@ -2294,7 +2419,7 @@
     var bits = [];
     if (s.gc) bits.push('Contractor: ' + s.gc);
     if (s.project) bits.push(projectLabel(s));
-    document.getElementById('headerSub').textContent = bits.length ? bits.join(' · ') + ' · v9.0' : 'v9.0';
+    document.getElementById('headerSub').textContent = bits.length ? bits.join(' · ') + ' · v9.2' : 'v9.2';
   }
 
   function onHsgRepPick() {
@@ -2418,10 +2543,10 @@
       +   '<tr><th>Going To (Destination)</th><td>' + esc(x.dest) + '</td></tr>'
       + '</table>'
       + '<table class="td-items">'
-      +   '<thead><tr><th>#</th><th>Vendor</th><th>Equipment Description</th><th>Qty</th><th>PO / Ticket #</th></tr></thead><tbody>'
+      +   '<thead><tr><th>#</th><th>Vendor</th><th>Equipment Description</th><th>Qty</th><th>Boxes</th><th>PO / Ticket #</th></tr></thead><tbody>'
       +   getItems(x).map(function(it, i) {
             return '<tr><td>' + (i + 1) + '</td><td>' + esc(it.vendor) + '</td><td>' + esc(it.desc) + '</td>'
-              + '<td>' + esc(((it.qty || '') + ' ' + (it.unit || '')).trim() || '—') + '</td>'
+              + '<td>' + (esc(it.qty) || '—') + '</td><td>' + esc(boxesCell(it.unit)) + '</td>'
               + '<td>' + (esc(it.po) || '—') + '</td></tr>';
           }).join('')
       + '</tbody></table>'
@@ -2495,7 +2620,7 @@
     var x = currentTrans.x, s = currentTrans.s;
     var tn = transNo(x, currentTrans.num);
     var itemLines = getItems(x).map(function(it, i) {
-      return (i + 1) + ') ' + it.desc + ' — ' + (((it.qty || '') + ' ' + (it.unit || '')).trim() || '—')
+      return (i + 1) + ') ' + it.desc + ' — ' + (qtyBoxesText(it) || '—')
         + ' — ' + it.vendor + (it.po ? ' — ' + it.po : '');
     }).join('\n');
     var body = 'DELIVERY TRANSMITTAL ' + tn
@@ -2527,7 +2652,7 @@
   function exportCSV() {
     var list = load();
     if (list.length === 0) { toast('Nothing to export', 'var(--red)'); return; }
-    var rows = [['Log #','Item #','Date','Time','Vendor','Equipment Description','Quantity','Unit','PO / Ticket #','Coming From (Origin)','Facilitated By','Going To (Destination)','Received By (GC)','Condition / Notes','Signed','Photos']];
+    var rows = [['Log #','Item #','Date','Time','Vendor','Equipment Description','Quantity','Boxes / Pkgs','PO / Ticket #','Coming From (Origin)','Facilitated By','Going To (Destination)','Received By (GC)','Condition / Notes','Signed','Photos']];
     list.forEach(function(x, i) {
       getItems(x).forEach(function(it, j) {
         rows.push([i + 1, j + 1, x.date, x.time, it.vendor, it.desc, it.qty, it.unit, it.po, x.from, x.fac, x.dest, x.recv, x.notes, x.sig ? 'Yes' : 'No', (x.photos && x.photos.length) || 0]);
@@ -3022,10 +3147,11 @@ function buildTransmittalPdf(jsPDF, x, num, s, tnOverride) {
   var y = ty + shared.length * rh + 14;
   var cols = [
     { t: '#', w: 22 },
-    { t: 'VENDOR', w: 116 },
-    { t: 'EQUIPMENT DESCRIPTION', w: 194 },
-    { t: 'QTY', w: 58 },
-    { t: 'PO / TICKET #', w: 114 }
+    { t: 'VENDOR', w: 112 },
+    { t: 'EQUIPMENT DESCRIPTION', w: 182 },
+    { t: 'QTY', w: 40 },
+    { t: 'BOXES', w: 44 },
+    { t: 'PO / TICKET #', w: 104 }
   ];
   function itemsHeader() {
     doc.setFillColor(NAVY[0], NAVY[1], NAVY[2]);
@@ -3045,8 +3171,9 @@ function buildTransmittalPdf(jsPDF, x, num, s, tnOverride) {
       [String(i + 1)],
       doc.splitTextToSize(it.vendor || '—', cols[1].w - 10),
       doc.splitTextToSize(it.desc || '—', cols[2].w - 10),
-      doc.splitTextToSize(((it.qty || '') + ' ' + (it.unit || '')).trim() || '—', cols[3].w - 10),
-      doc.splitTextToSize(it.po || '—', cols[4].w - 10)
+      doc.splitTextToSize(String(it.qty || '').trim() || '—', cols[3].w - 10),
+      doc.splitTextToSize(boxesCell(it.unit), cols[4].w - 10),
+      doc.splitTextToSize(it.po || '—', cols[5].w - 10)
     ];
     var lines = Math.max.apply(null, cells.map(function (c) { return c.length; }));
     var rowH = Math.max(18, lines * 10.5 + 8);
